@@ -1,7 +1,6 @@
 #include "BaselineGenerator.hpp"
 
 #include <Geode/binding/DrawGridLayer.hpp>
-#include <Geode/binding/EditorUI.hpp>
 #include <Geode/binding/GameObject.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <Geode/binding/LevelSettingsObject.hpp>
@@ -25,16 +24,15 @@ float snapGridX(float x) {
 }
 
 bool addGeneratedObject(
-    EditorUI* editorUI,
+    LevelEditorLayer* editorLayer,
     int objectID,
     CCPoint const& position
 ) {
-    if (!editorUI) {
+    if (!editorLayer) {
         return false;
     }
 
-    editorUI->createObject(objectID, position);
-    return true;
+    return editorLayer->createObject(objectID, position, true) != nullptr;
 }
 
 std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std::string& error) {
@@ -85,13 +83,12 @@ std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std
 }
 
 BaselineGenerationResult generateBaselineLayout(
-    EditorUI* editorUI,
     LevelEditorLayer* editorLayer,
     std::filesystem::path const& analysisPath
 ) {
     BaselineGenerationResult result;
 
-    if (!editorUI || !editorLayer || !editorLayer->m_levelSettings || !editorLayer->m_drawGridLayer) {
+    if (!editorLayer || !editorLayer->m_levelSettings || !editorLayer->m_drawGridLayer) {
         result.error = "The editor is missing timing/settings data.";
         return result;
     }
@@ -144,7 +141,7 @@ BaselineGenerationResult generateBaselineLayout(
     }
 
     std::vector<BeatSample> beats;
-    for (auto iterator = first; iterator != allBeats.end() && beats.size() < 32; ++iterator) {
+    for (auto iterator = first; iterator != allBeats.end() && beats.size() < 64; ++iterator) {
         beats.push_back(*iterator);
     }
 
@@ -172,9 +169,22 @@ BaselineGenerationResult generateBaselineLayout(
     // baseline only places gameplay events on top of it, so the generated
     // section starts playable instead of forcing the cube into a block wall.
 
-    // One rhythm event per four-beat phrase. The strongest detected beat in
-    // each phrase receives the obstacle so the preview visibly follows the song
-    // without turning into an unreadable wall of spikes.
+    // Put one harmless orb marker on every detected beat so sync is visually
+    // obvious during playtest. Obstacles are layered onto a subset of those beats.
+    for (std::size_t index = 0; index < beats.size(); ++index) {
+        float beatX = positionForBeat(beats[index]).x;
+
+        // Alternate the marker height in a simple 4-beat contour so the beat grid
+        // is easy to see without turning the markers into required inputs.
+        constexpr float markerHeights[] = {75.0f, 90.0f, 105.0f, 90.0f};
+        float markerY = markerHeights[index % 4];
+
+        createdObjects += addGeneratedObject(editorLayer, 36, {beatX, markerY}) ? 1 : 0;
+    }
+
+    // One gameplay event per four-beat phrase. The strongest detected beat in
+    // each phrase receives the obstacle so the preview follows musical accents
+    // while the per-beat orb markers make timing density obvious.
     std::size_t phraseIndex = 0;
     for (std::size_t start = 4; start + 3 < beats.size(); start += 4, ++phraseIndex) {
         std::size_t strongest = start;
@@ -189,31 +199,27 @@ BaselineGenerationResult generateBaselineLayout(
             }
         }
 
-        float obstacleX = snapGridX(positionForBeat(beats[strongest]).x);
+        float obstacleX = positionForBeat(beats[strongest]).x;
 
         if (phraseIndex % 4 == 3) {
             // Give some phrases a non-lethal automatic jump instead of another
             // spike so the baseline is visibly more than a metronome of hazards.
-            createdObjects += addGeneratedObject(editorUI, 35, {obstacleX, 15.0f}) ? 1 : 0;
+            createdObjects += addGeneratedObject(editorLayer, 35, {obstacleX, 15.0f}) ? 1 : 0;
         } else {
             // Standard ground spike. Every third phrase gets a second adjacent
             // spike when there is enough room before the next detected beat.
-            createdObjects += addGeneratedObject(editorUI, 8, {obstacleX, 15.0f}) ? 1 : 0;
+            createdObjects += addGeneratedObject(editorLayer, 8, {obstacleX, 15.0f}) ? 1 : 0;
 
             if (phraseIndex % 3 == 2 && strongest + 1 < beats.size()) {
                 float nextBeatX = positionForBeat(beats[strongest + 1]).x;
                 if (nextBeatX - obstacleX >= 105.0f) {
-                    createdObjects += addGeneratedObject(editorUI, 8, {obstacleX + 30.0f, 15.0f}) ? 1 : 0;
+                    createdObjects += addGeneratedObject(editorLayer, 8, {obstacleX + 30.0f, 15.0f}) ? 1 : 0;
                 }
             }
         }
 
-        // Add an optional yellow orb to alternating phrases. It is intentionally
-        // not required for survival yet; this is a visible music-sync baseline,
-        // not the learned gameplay generator.
-        if (phraseIndex % 2 == 1) {
-            createdObjects += addGeneratedObject(editorUI, 36, {obstacleX + 60.0f, 90.0f}) ? 1 : 0;
-        }
+        // The beat marker layer above already shows every beat, so phrase events
+        // stay focused on actual gameplay objects.
     }
 
     if (createdObjects == 0) {
