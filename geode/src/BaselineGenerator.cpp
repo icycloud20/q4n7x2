@@ -62,6 +62,42 @@ struct LearnedProfile {
     double quiet = 0.03;
 };
 
+
+enum class MotifKind {
+    Solid = 0,
+    Slope = 1,
+    Hazard = 2,
+    Orb = 3,
+    Pad = 4,
+    Portal = 5,
+};
+
+struct MotifEvent {
+    MotifKind kind = MotifKind::Solid;
+    int objectID = 1;
+    double beatOffset = 0.0;
+    float relativeY = 0.0f;
+    float rotation = 0.0f;
+};
+
+struct StructuralMotif {
+    bool entryInverted = false;
+    bool exitInverted = false;
+    bool entryMini = false;
+    bool exitMini = false;
+    float exitDeltaY = 0.0f;
+    float minRelativeY = 0.0f;
+    float maxRelativeY = 0.0f;
+    double intensity = 0.0;
+    std::vector<MotifEvent> events;
+};
+
+struct StructuralProfile {
+    bool loaded = false;
+    std::size_t sourceLevels = 0;
+    std::vector<StructuralMotif> motifs;
+};
+
 bool addGeneratedObject(
     LevelEditorLayer* editorLayer,
     int objectID,
@@ -168,6 +204,51 @@ float padYForHeight(int height) {
 
 float orbYForHeight(int height, float extra = 90.0f) {
     return kGroundSurfaceY + static_cast<float>(std::max(0, height) * 30) + extra;
+}
+
+
+bool addGeneratedObjectWithRotation(
+    LevelEditorLayer* editorLayer,
+    int objectID,
+    CCPoint const& position,
+    float rotation
+) {
+    if (!editorLayer) {
+        return false;
+    }
+
+    auto* object = editorLayer->createObject(objectID, position, true);
+    if (!object) {
+        return false;
+    }
+
+    object->setRotation(rotation);
+    return true;
+}
+
+std::size_t addHorizontalBridge(
+    LevelEditorLayer* editorLayer,
+    float startX,
+    float endX,
+    float y,
+    std::size_t& createdObjects
+) {
+    if (!editorLayer || endX <= startX) {
+        return 0;
+    }
+
+    std::size_t added = 0;
+    float x = startX;
+
+    while (x <= endX + 1.0f && added < 18) {
+        if (addGeneratedObject(editorLayer, 1, {x, y})) {
+            ++added;
+            ++createdObjects;
+        }
+        x += 30.0f;
+    }
+
+    return added;
 }
 
 AnalysisData readAnalysis(std::filesystem::path const& analysisPath, std::string& error) {
@@ -301,6 +382,148 @@ LearnedProfile readLearnedProfile() {
     }
 
     return profile;
+}
+
+
+StructuralProfile readStructuralProfile() {
+    StructuralProfile profile;
+    auto profilePath = Mod::get()->getResourcesDir() / "learned-motifs-v2.json";
+
+    std::ifstream input(profilePath);
+    if (!input) {
+        log::warn("Learned structural motif profile is missing: {}", profilePath.string());
+        return profile;
+    }
+
+    auto parsed = matjson::parse(input);
+    if (!parsed.isOk()) {
+        log::warn("Could not parse learned structural motif profile: {}", profilePath.string());
+        return profile;
+    }
+
+    auto root = parsed.unwrap();
+    profile.sourceLevels = static_cast<std::size_t>(
+        std::max(0.0, root["n"].asDouble().unwrapOr(0.0))
+    );
+
+    auto motifsResult = root["motifs"].asArray();
+    if (!motifsResult.isOk()) {
+        return profile;
+    }
+
+    for (auto const& value : motifsResult.unwrap()) {
+        StructuralMotif motif;
+        motif.entryInverted = value["g0"].asDouble().unwrapOr(0.0) > 0.5;
+        motif.exitInverted = value["g1"].asDouble().unwrapOr(0.0) > 0.5;
+        motif.entryMini = value["m0"].asDouble().unwrapOr(0.0) > 0.5;
+        motif.exitMini = value["m1"].asDouble().unwrapOr(0.0) > 0.5;
+        motif.exitDeltaY = static_cast<float>(value["dy"].asDouble().unwrapOr(0.0));
+        motif.minRelativeY = static_cast<float>(value["mn"].asDouble().unwrapOr(0.0));
+        motif.maxRelativeY = static_cast<float>(value["mx"].asDouble().unwrapOr(0.0));
+        motif.intensity = value["q"].asDouble().unwrapOr(0.0);
+
+        auto eventsResult = value["e"].asArray();
+        if (!eventsResult.isOk()) {
+            continue;
+        }
+
+        for (auto const& eventValue : eventsResult.unwrap()) {
+            auto fieldsResult = eventValue.asArray();
+            if (!fieldsResult.isOk()) {
+                continue;
+            }
+
+            auto const& fields = fieldsResult.unwrap();
+            if (fields.size() < 5) {
+                continue;
+            }
+
+            MotifEvent event;
+            event.kind = static_cast<MotifKind>(
+                std::clamp(
+                    static_cast<int>(fields[0].asDouble().unwrapOr(0.0)),
+                    0,
+                    5
+                )
+            );
+            event.objectID = std::max(
+                1,
+                static_cast<int>(fields[1].asDouble().unwrapOr(1.0))
+            );
+            event.beatOffset = fields[2].asDouble().unwrapOr(0.0);
+            event.relativeY = static_cast<float>(fields[3].asDouble().unwrapOr(0.0));
+            event.rotation = static_cast<float>(fields[4].asDouble().unwrapOr(0.0));
+            motif.events.push_back(event);
+        }
+
+        if (motif.events.size() >= 4) {
+            profile.motifs.push_back(std::move(motif));
+        }
+    }
+
+    profile.loaded = !profile.motifs.empty();
+
+    if (profile.loaded) {
+        log::info(
+            "Loaded {} learned 8-beat structural motifs from {} source levels",
+            profile.motifs.size(),
+            profile.sourceLevels
+        );
+    }
+
+    return profile;
+}
+
+StructuralMotif const* chooseStructuralMotif(
+    StructuralProfile const& profile,
+    std::size_t chunkIndex,
+    double targetIntensity,
+    float anchorY,
+    bool inverted,
+    bool mini
+) {
+    StructuralMotif const* best = nullptr;
+    double bestScore = std::numeric_limits<double>::infinity();
+
+    for (std::size_t index = 0; index < profile.motifs.size(); ++index) {
+        auto const& motif = profile.motifs[index];
+
+        if (motif.entryInverted != inverted || motif.entryMini != mini) {
+            continue;
+        }
+
+        float adjustedAnchor = anchorY;
+        if (adjustedAnchor + motif.minRelativeY < kGroundY) {
+            adjustedAnchor = kGroundY - motif.minRelativeY;
+        }
+        if (adjustedAnchor + motif.maxRelativeY > 900.0f) {
+            adjustedAnchor = 900.0f - motif.maxRelativeY;
+        }
+
+        if (adjustedAnchor < kGroundY - 1.0f) {
+            continue;
+        }
+
+        double heightShiftPenalty =
+            std::abs(static_cast<double>(adjustedAnchor - anchorY)) / 450.0;
+        double deterministicJitter = std::fmod(
+            static_cast<double>(chunkIndex + 1) * 0.61803398875
+                + static_cast<double>(index + 1) * 0.41421356237,
+            1.0
+        ) * 0.16;
+
+        double score =
+            std::abs(motif.intensity - targetIntensity)
+            + heightShiftPenalty
+            + deterministicJitter;
+
+        if (score < bestScore) {
+            bestScore = score;
+            best = &motif;
+        }
+    }
+
+    return best;
 }
 
 double beatScore(BeatSample const& beat) {
@@ -580,331 +803,185 @@ BaselineGenerationResult generateBaselineLayout(
         }
     }
 
-    // Structured phrase generation. The template distribution is not arbitrary:
-    // it is loaded from learned-profile-v1.json, currently produced from
-    // Absolute Zero 2 + Sakura 2 aligned exports.
-    //
-    // v2 also carries a persistent path height between phrases. Earlier builds
-    // generated each four-beat chunk independently, which is why the result
-    // looked like disconnected piles of blocks. Each phrase now has to enter
-    // from the previous phrase's surface and deliberately stay, rise, or fall.
-    std::size_t phraseIndex = 0;
-    int pathHeight = 0;
 
-    for (std::size_t start = 4; start + 3 < beats.size(); start += 4, ++phraseIndex) {
-        float x0 = positionForBeat(beats[start]).x;
-        float x1 = positionForBeat(beats[start + 1]).x;
-        float x2 = positionForBeat(beats[start + 2]).x;
-        float x3 = positionForBeat(beats[start + 3]).x;
+    // Structural motif generation v2. Rather than asking a four-beat phrase for
+    // a bag of object categories, this adapts complete eight-beat relative
+    // structures learned from clean human layout exports.
+    auto structuralProfile = readStructuralProfile();
+    result.learnedStructuralProfileLoaded = structuralProfile.loaded;
+    result.learnedMotifCount = structuralProfile.motifs.size();
 
-        double phraseEnergy = 0.0;
-        double phraseOnset = 0.0;
+    float pathAnchorY = kGroundY;
+    bool currentInverted = false;
+    bool currentMini = editorLayer->m_levelSettings->m_startMini;
+    std::size_t generatedMotifs = 0;
 
-        for (std::size_t index = start; index < start + 4; ++index) {
-            phraseEnergy += beats[index].energy;
-            phraseOnset += beats[index].onset;
+    auto positionForBeatOffset = [&](std::size_t startIndex, double beatOffset) {
+        beatOffset = std::clamp(beatOffset, 0.0, 8.0);
+
+        auto whole = static_cast<std::size_t>(std::floor(beatOffset));
+        double fraction = beatOffset - static_cast<double>(whole);
+        std::size_t leftIndex = std::min(startIndex + whole, beats.size() - 1);
+
+        if (fraction <= 0.000001 || leftIndex + 1 >= beats.size()) {
+            return positionForAudioTime(beats[leftIndex].time);
         }
 
-        phraseEnergy /= 4.0;
-        phraseOnset /= 4.0;
+        double time =
+            beats[leftIndex].time
+            + (beats[leftIndex + 1].time - beats[leftIndex].time) * fraction;
+        return positionForAudioTime(time);
+    };
 
-        auto phraseTemplate = choosePhraseTemplate(
-            profile,
-            phraseIndex,
-            phraseEnergy,
-            phraseOnset
-        );
+    if (structuralProfile.loaded && !currentMini) {
+        for (
+            std::size_t start = 4;
+            start + 8 < beats.size();
+            start += 8, ++generatedMotifs
+        ) {
+            double chunkEnergy = 0.0;
+            double chunkOnset = 0.0;
 
-        ++result.phraseCount;
+            for (std::size_t index = start; index < start + 8; ++index) {
+                chunkEnergy += beats[index].energy;
+                chunkOnset += beats[index].onset;
+            }
 
-        // Cap complexity using the density learned from exported cube phrases.
-        int eventBudget = std::clamp(
-            phraseEnergy > 0.70
-                ? profile.recommendedMaxEvents
-                : profile.recommendedMaxEvents - 1,
-            2,
-            6
-        );
+            chunkEnergy /= 8.0;
+            chunkOnset /= 8.0;
+            double targetIntensity = std::clamp(
+                chunkEnergy * 0.68 + chunkOnset * 0.32,
+                0.0,
+                1.0
+            );
 
-        float currentSpikeY = spikeYForHeight(pathHeight);
-        float currentPadY = padYForHeight(pathHeight);
+            auto const* motif = chooseStructuralMotif(
+                structuralProfile,
+                generatedMotifs,
+                targetIntensity,
+                pathAnchorY,
+                currentInverted,
+                currentMini
+            );
 
-        // If we entered this phrase above the ground, carry the previous floor
-        // into the first beat so the player never starts a phrase over empty air.
-        if (pathHeight > 0) {
-            structuredBlocks += addPlatformSpan(
+            if (!motif) {
+                // If the current state has no matching motif, keep a safe short
+                // connector instead of inventing a random object combination.
+                float x0 = positionForBeat(beats[start]).x;
+                float x2 = positionForBeat(beats[start + 2]).x;
+                structuredBlocks += addHorizontalBridge(
+                    editorLayer,
+                    x0,
+                    x2,
+                    pathAnchorY,
+                    createdObjects
+                );
+                continue;
+            }
+
+            float motifAnchorY = pathAnchorY;
+
+            if (motifAnchorY + motif->minRelativeY < kGroundY) {
+                motifAnchorY = kGroundY - motif->minRelativeY;
+            }
+            if (motifAnchorY + motif->maxRelativeY > 900.0f) {
+                motifAnchorY = 900.0f - motif->maxRelativeY;
+            }
+
+            double firstStructureBeat = 8.0;
+            for (auto const& event : motif->events) {
+                if (
+                    event.kind == MotifKind::Solid
+                    || event.kind == MotifKind::Slope
+                    || event.kind == MotifKind::Pad
+                ) {
+                    firstStructureBeat = std::min(
+                        firstStructureBeat,
+                        event.beatOffset
+                    );
+                }
+            }
+
+            if (
+                !currentInverted
+                && std::abs(motifAnchorY - pathAnchorY) < 45.0f
+                && firstStructureBeat > 0.25
+            ) {
+                float bridgeStart = positionForBeat(beats[start]).x - 30.0f;
+                float bridgeEnd =
+                    positionForBeatOffset(start, firstStructureBeat).x - 30.0f;
+                structuredBlocks += addHorizontalBridge(
+                    editorLayer,
+                    bridgeStart,
+                    bridgeEnd,
+                    pathAnchorY,
+                    createdObjects
+                );
+            }
+
+            for (auto const& event : motif->events) {
+                auto position = positionForBeatOffset(start, event.beatOffset);
+                position.y = motifAnchorY + event.relativeY;
+
+                if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
+                    continue;
+                }
+
+                if (
+                    !addGeneratedObjectWithRotation(
+                        editorLayer,
+                        event.objectID,
+                        position,
+                        event.rotation
+                    )
+                ) {
+                    continue;
+                }
+
+                ++createdObjects;
+
+                if (
+                    event.kind == MotifKind::Solid
+                    || event.kind == MotifKind::Slope
+                ) {
+                    ++structuredBlocks;
+                } else {
+                    ++gameplayEvents;
+                }
+            }
+
+            pathAnchorY = std::clamp(
+                motifAnchorY + motif->exitDeltaY,
+                kGroundY,
+                900.0f
+            );
+            currentInverted = motif->exitInverted;
+            currentMini = motif->exitMini;
+            ++result.phraseCount;
+        }
+    } else {
+        // Small fallback only for a missing/corrupt motif resource. Normal builds
+        // should never take this path.
+        for (std::size_t start = 4; start + 3 < beats.size(); start += 4) {
+            float x0 = positionForBeat(beats[start]).x;
+            float x2 = positionForBeat(beats[start + 2]).x;
+
+            structuredBlocks += addHorizontalBridge(
                 editorLayer,
-                x0 - 45.0f,
-                x1 - 30.0f,
-                pathHeight,
+                x0 - 30.0f,
+                x2,
+                kGroundY,
                 createdObjects
             );
-        }
 
-        switch (phraseTemplate) {
-            case PhraseTemplate::HazardOrbPad: {
-                int targetHeight = std::min(2, pathHeight + 1);
-
-                addCountedObject(
-                    editorLayer,
-                    35,
-                    {x0, currentPadY},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                structuredBlocks += addPlatformSpan(
-                    editorLayer,
-                    x1 - 30.0f,
-                    x3 + 45.0f,
-                    targetHeight,
-                    createdObjects
-                );
-
-                addCountedObject(
-                    editorLayer,
-                    36,
-                    {x2, orbYForHeight(targetHeight, 78.0f)},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                addCountedObject(
-                    editorLayer,
-                    8,
-                    {x3, spikeYForHeight(targetHeight)},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                if (eventBudget >= 4 && phraseEnergy > 0.62) {
-                    addCountedObject(
-                        editorLayer,
-                        141,
-                        {(x2 + x3) * 0.5f, orbYForHeight(targetHeight, 54.0f)},
-                        createdObjects,
-                        gameplayEvents
-                    );
-                }
-
-                pathHeight = targetHeight;
-                break;
-            }
-
-            case PhraseTemplate::HazardPad: {
-                int targetHeight = pathHeight < 2 ? pathHeight + 1 : pathHeight;
-
-                addCountedObject(
-                    editorLayer,
-                    35,
-                    {x0, currentPadY},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                structuredBlocks += addPlatformSpan(
-                    editorLayer,
-                    x1 - 30.0f,
-                    x3 + 30.0f,
-                    targetHeight,
-                    createdObjects
-                );
-
-                addCountedObject(
-                    editorLayer,
-                    8,
-                    {x3, spikeYForHeight(targetHeight)},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                if (eventBudget >= 3 && phraseEnergy > 0.50) {
-                    addCountedObject(
-                        editorLayer,
-                        8,
-                        {x3 + 30.0f, spikeYForHeight(targetHeight)},
-                        createdObjects,
-                        gameplayEvents
-                    );
-                }
-
-                pathHeight = targetHeight;
-                break;
-            }
-
-            case PhraseTemplate::HazardOrb: {
-                if (pathHeight > 0) {
-                    structuredBlocks += addPlatformSpan(
-                        editorLayer,
-                        x1 - 30.0f,
-                        x3 + 30.0f,
-                        pathHeight,
-                        createdObjects
-                    );
-                }
-
-                addCountedObject(
-                    editorLayer,
-                    8,
-                    {x0, currentSpikeY},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                addCountedObject(
-                    editorLayer,
-                    36,
-                    {x2, orbYForHeight(pathHeight, 82.0f)},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                if (eventBudget >= 3) {
-                    addCountedObject(
-                        editorLayer,
-                        8,
-                        {x3, currentSpikeY},
-                        createdObjects,
-                        gameplayEvents
-                    );
-                }
-                break;
-            }
-
-            case PhraseTemplate::HazardOnly: {
-                if (pathHeight > 0) {
-                    structuredBlocks += addPlatformSpan(
-                        editorLayer,
-                        x1 - 45.0f,
-                        x3 + 45.0f,
-                        pathHeight,
-                        createdObjects
-                    );
-                }
-
-                addCountedObject(
-                    editorLayer,
-                    8,
-                    {x1, currentSpikeY},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                if (eventBudget >= 3 || phraseEnergy > 0.52) {
-                    addCountedObject(
-                        editorLayer,
-                        8,
-                        {x1 + 30.0f, currentSpikeY},
-                        createdObjects,
-                        gameplayEvents
-                    );
-                }
-
-                if (eventBudget >= 4 && phraseIndex % 2 == 0) {
-                    addCountedObject(
-                        editorLayer,
-                        36,
-                        {x3, orbYForHeight(pathHeight, 72.0f)},
-                        createdObjects,
-                        gameplayEvents
-                    );
-                }
-                break;
-            }
-
-            case PhraseTemplate::PadOnly: {
-                int targetHeight = pathHeight < 2 ? pathHeight + 1 : pathHeight;
-
-                addCountedObject(
-                    editorLayer,
-                    35,
-                    {x1, currentPadY},
-                    createdObjects,
-                    gameplayEvents
-                );
-
-                structuredBlocks += addPlatformSpan(
-                    editorLayer,
-                    x2 - 30.0f,
-                    x3 + 45.0f,
-                    targetHeight,
-                    createdObjects
-                );
-
-                pathHeight = targetHeight;
-                break;
-            }
-
-            case PhraseTemplate::Quiet: {
-                if (pathHeight > 0) {
-                    // Quiet phrases are also our safe way back down. Carry the
-                    // high platform through beat 1, then present a lower landing.
-                    int targetHeight = std::max(0, pathHeight - 1);
-
-                    structuredBlocks += addPlatformSpan(
-                        editorLayer,
-                        x0 - 45.0f,
-                        x1 + 15.0f,
-                        pathHeight,
-                        createdObjects
-                    );
-
-                    if (targetHeight > 0) {
-                        structuredBlocks += addPlatformSpan(
-                            editorLayer,
-                            x2 - 15.0f,
-                            x3 + 45.0f,
-                            targetHeight,
-                            createdObjects
-                        );
-                    }
-
-                    pathHeight = targetHeight;
-                } else if (phraseIndex % 2 == 0) {
-                    // Ground-level breathing section: one tiny optional ledge,
-                    // not a random wall directly in the path.
-                    structuredBlocks += addBlockColumn(
-                        editorLayer,
-                        (x2 + x3) * 0.5f,
-                        1,
-                        createdObjects
-                    );
-                }
-                break;
-            }
-        }
-
-        // Busy phrases get one actual off-beat interaction near the strongest
-        // micro-onset between the middle beats. This is the first step away from
-        // "beat = object" toward subdivisions driving gameplay.
-        if (
-            phraseEnergy > 0.64
-            && profile.denseSubdivisionWeight > 0.65
-            && eventBudget >= 4
-        ) {
-            OnsetSample const* strongestMicro = nullptr;
-
-            for (auto const& onset : usableOnsets) {
-                if (onset.time <= beats[start + 1].time || onset.time >= beats[start + 3].time) {
-                    continue;
-                }
-                if (nearestBeatDistance(beats, onset.time) < 0.090) {
-                    continue;
-                }
-                if (!strongestMicro || onset.strength > strongestMicro->strength) {
-                    strongestMicro = &onset;
-                }
-            }
-
-            if (strongestMicro && strongestMicro->strength >= threshold) {
-                float microX = positionForAudioTime(strongestMicro->time).x;
-                addCountedObject(
-                    editorLayer,
-                    141,
-                    {microX, kGroundSurfaceY + 75.0f},
-                    createdObjects,
-                    gameplayEvents
-                );
+            if (addCountedObject(
+                editorLayer,
+                8,
+                {x2 + 30.0f, kGroundY},
+                createdObjects,
+                gameplayEvents
+            )) {
+                ++result.phraseCount;
             }
         }
     }

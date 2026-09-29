@@ -17,7 +17,9 @@ struct BaselineGenerationResult {
     std::size_t phraseCount = 0;
     std::size_t learnedSourceLevels = 0;
     std::size_t learnedSourcePhrases = 0;
+    std::size_t learnedMotifCount = 0;
     bool learnedProfileLoaded = false;
+    bool learnedStructuralProfileLoaded = false;
     double firstBeatTime = 0.0;
     double lastBeatTime = 0.0;
 };

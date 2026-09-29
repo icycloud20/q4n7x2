@@ -433,35 +433,33 @@ class $modify(GDAIEditorUI, EditorUI) {
             4.0f
         );
 
-        auto learningLine = generation.learnedProfileLoaded
+        auto learningLine = generation.learnedStructuralProfileLoaded
             ? fmt::format(
-                "Learned phrase prior: <cg>{}</c> exported levels / <cy>{}</c> cube phrases",
+                "Learned structure: <cg>{}</c> source levels / <cy>{}</c> 8-beat motifs",
                 generation.learnedSourceLevels,
-                generation.learnedSourcePhrases
+                generation.learnedMotifCount
             )
-            : std::string("Learned phrase prior: <cr>fallback defaults</c>");
+            : std::string("Learned structure: <cr>fallback only</c>");
 
         FLAlertLayer::create(
-            "Phrase Generator v1",
+            "Structural Generator v2",
             fmt::format(
                 "Created <cg>{}</c> objects across <cy>{}</c> main beats.<br>"
-                "Built <co>{}</c> structured blocks and <co>{}</c> gameplay interactions "
-                "across <cy>{}</c> generated phrases.<br>"
+                "Built <co>{}</c> structural objects and <co>{}</c> gameplay interactions "
+                "across <cy>{}</c> learned chunks.<br>"
                 "Surfaced <cp>{}</c> strong off-beat onsets.<br><br>"
-                "{}<br><br>"
+                "{}<br>"
+                "Phrase/rhythm prior: <cy>{}</c> cube phrases.<br><br>"
                 "<cy>Yellow orbs</c> = beat debug lane<br>"
-                "<cp>Pink orbs</c> = strong micro-onsets<br>"
-                "Blocks/spikes/pads/orbs = phrase-level gameplay<br><br>"
-                "This version is now dataset-informed: the mix of phrase types and "
-                "subdivision density comes from exported human levels instead of being "
-                "picked entirely by hand.",
+                "<cp>Pink orbs</c> = strong micro-onsets",
                 generation.createdObjects,
                 generation.usedBeats,
                 generation.structuredBlocks,
                 generation.gameplayEvents,
                 generation.phraseCount,
                 generation.usedMicroOnsets,
-                learningLine
+                learningLine,
+                generation.learnedSourcePhrases
             ),
             "OK"
         )->show();
