@@ -43,7 +43,45 @@ audio features + gameplay events
 aligned training windows
 ```
 
-## Setup
+## Geode mod
+
+There is now an actual Windows Geode mod in `geode/`.
+
+When you open a level in the Geometry Dash editor it adds a music-note button to the editor controls. Pressing it:
+
+1. reads the current level's song ID / audio track,
+2. resolves the already-downloaded audio file from Geometry Dash automatically,
+3. checks the mod's per-song analysis cache,
+4. runs the bundled standalone analyzer if the song has not been analyzed yet,
+5. stores JSON analysis plus a beat-preview WAV for later training and debugging.
+
+You do **not** manually browse for the song. For a custom song, it only needs to have been downloaded normally inside Geometry Dash.
+
+### Get a ready-made `.geode` build
+
+The repository builds a self-contained Windows package through GitHub Actions.
+
+Go to **Actions → GD AI Editor - Windows → latest successful run → Artifacts → `gd-ai-editor-windows`**.
+
+The artifact contains the packaged `.geode` mod, including the standalone Python audio backend. Put the `.geode` file in your Geode mods folder or use Geode's manual-install flow.
+
+### Build locally
+
+Install the Geode CLI/SDK once, then from the repository root run:
+
+```powershell
+.\scripts\build-geode.ps1
+```
+
+That builds the standalone backend first, bundles it into the mod resources, then runs the Geode build.
+
+If you are only changing C++ and already have `geode/resources/gd-ai-backend.exe`, you can skip rebuilding the backend:
+
+```powershell
+.\scripts\build-geode.ps1 -SkipBackend
+```
+
+## Python-only setup
 
 Use Python 3.11 or newer.
 
@@ -131,7 +169,10 @@ For a Geometry Dash song, the most important early test is **timing stability**.
 - [ ] candidate ranker
 
 ### M4 — editor integration
-- [ ] Geode bridge
+- [x] initial Geode bridge
+- [x] automatic current-song discovery
+- [x] per-song analysis cache
+- [x] bundled analyzer launch
 - [ ] select timeline range
 - [ ] generate multiple candidates
 - [ ] preview / accept / reject
