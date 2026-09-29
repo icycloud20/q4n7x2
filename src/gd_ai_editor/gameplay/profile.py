@@ -115,7 +115,7 @@ def build_motif_profile(levels: list[dict[str, typing.Any]]) -> dict[str, typing
 
         cluster_beats = sorted(clusters)
         if cluster_beats:
-            phrase_cluster_map: dict[int, int] = Counter(
+            phrase_cluster_map: dict[int, int] = collections.Counter(
                 math.floor(beat / 4.0) for beat in cluster_beats
             )
             phrase_cluster_counts.extend(phrase_cluster_map.values())
