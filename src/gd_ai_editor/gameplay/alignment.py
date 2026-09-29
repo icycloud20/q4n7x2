@@ -14,7 +14,7 @@ def load_json(path: str | Path) -> dict[str, Any]:
         value = json.load(handle)
 
     if not isinstance(value, dict):
-        raise ValueError(f"Expected a JSON object in {source}")
+        raise TypeError(f"Expected a JSON object in {source}")
 
     return value
 
@@ -29,7 +29,7 @@ def write_json(path: str | Path, payload: dict[str, Any]) -> Path:
 def _beat_times(analysis: dict[str, Any]) -> list[float]:
     beats = analysis.get("beats")
     if not isinstance(beats, list):
-        raise ValueError("Audio analysis is missing a beats array")
+        raise TypeError("Audio analysis is missing a beats array")
 
     result: list[float] = []
     for beat in beats:
@@ -188,7 +188,7 @@ def align_gameplay_export(
 
     raw_objects = gameplay.get("objects")
     if not isinstance(raw_objects, list):
-        raise ValueError("Gameplay export is missing an objects array")
+        raise TypeError("Gameplay export is missing an objects array")
 
     result = copy.deepcopy(gameplay)
     aligned_objects: list[dict[str, Any]] = []
