@@ -1,0 +1,24 @@
+{
+  "geode": "5.8.2",
+  "gd": {
+    "win": "2.2081"
+  },
+  "id": "duckydev.gd-ai-editor",
+  "name": "GD AI Editor",
+  "version": "v0.1.0",
+  "developer": "DuckyDev",
+  "description": "Music-aware Geometry Dash gameplay generation research tools.",
+  "tags": [
+    "editor",
+    "music",
+    "utility"
+  ],
+  "dependencies": {
+    "geode.node-ids": ">=v1.23.3"
+  },
+  "resources": {
+    "files": [
+      "resources/*"
+    ]
+  }
+}
