@@ -76,6 +76,17 @@ To also print a readable summary:
 gd-ai audio analyze "path/to/song.mp3" --out artifacts/song-analysis.json --summary
 ```
 
+For the most useful first test, also create a listenable beat preview:
+
+```bash
+gd-ai audio analyze "path/to/song.mp3" \
+  --out artifacts/song-analysis.json \
+  --beat-preview artifacts/beat-preview.wav \
+  --summary
+```
+
+The preview is the original song with short clicks placed on every detected beat. Listen through the whole track and check whether the clicks stay locked to the rhythm instead of slowly drifting.
+
 ## What to test first
 
 Use a song you know extremely well.
