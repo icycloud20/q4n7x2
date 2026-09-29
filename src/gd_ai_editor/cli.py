@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from gd_ai_editor.audio import analyze_audio, write_beat_preview
+from gd_ai_editor.gameplay import align_gameplay_export, load_json, write_json
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -86,6 +87,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Analysis hop length (default: 512)",
     )
 
+    gameplay_parser = commands.add_parser("gameplay", help="Gameplay dataset commands")
+    gameplay_commands = gameplay_parser.add_subparsers(dest="gameplay_command", required=True)
+
+    align_parser = gameplay_commands.add_parser(
+        "align",
+        help="Align an exported Geometry Dash gameplay timeline to analyzed song beats",
+    )
+    align_parser.add_argument("gameplay_file", type=Path)
+    align_parser.add_argument("analysis_file", type=Path)
+    align_parser.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="Path to the aligned gameplay JSON file",
+    )
+    align_parser.add_argument(
+        "--window-beats",
+        type=float,
+        default=8.0,
+        help="Training-window width in beats (default: 8)",
+    )
+    align_parser.add_argument(
+        "--stride-beats",
+        type=float,
+        default=4.0,
+        help="Training-window stride in beats (default: 4)",
+    )
+
     return parser
 
 
@@ -113,6 +142,21 @@ def main() -> None:
 
         if arguments.summary:
             _print_summary(analysis)
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "align":
+        gameplay = load_json(arguments.gameplay_file)
+        analysis = load_json(arguments.analysis_file)
+        aligned = align_gameplay_export(
+            gameplay,
+            analysis,
+            window_beats=arguments.window_beats,
+            stride_beats=arguments.stride_beats,
+        )
+        output = write_json(arguments.out, aligned)
+        print(f"Wrote {output}")
+        print(f"Aligned objects: {len(aligned.get('objects', []))}")
+        print(f"Training windows: {len(aligned.get('windows', []))}")
         return
 
     parser.error("Unknown command")
