@@ -433,21 +433,35 @@ class $modify(GDAIEditorUI, EditorUI) {
             4.0f
         );
 
+        auto learningLine = generation.learnedProfileLoaded
+            ? fmt::format(
+                "Learned phrase prior: <cg>{}</c> exported levels / <cy>{}</c> cube phrases",
+                generation.learnedSourceLevels,
+                generation.learnedSourcePhrases
+            )
+            : std::string("Learned phrase prior: <cr>fallback defaults</c>");
+
         FLAlertLayer::create(
-            "Generator Preview v2",
+            "Phrase Generator v1",
             fmt::format(
                 "Created <cg>{}</c> objects across <cy>{}</c> main beats.<br>"
-                "Also surfaced <cp>{}</c> strong off-beat onsets and placed "
-                "<co>{}</c> gameplay events.<br><br>"
-                "<cy>Yellow orbs</c> = tracked beats<br>"
+                "Built <co>{}</c> structured blocks and <co>{}</c> gameplay interactions "
+                "across <cy>{}</c> generated phrases.<br>"
+                "Surfaced <cp>{}</c> strong off-beat onsets.<br><br>"
+                "{}<br><br>"
+                "<cy>Yellow orbs</c> = beat debug lane<br>"
                 "<cp>Pink orbs</c> = strong micro-onsets<br>"
-                "Spikes/pads = energy-aware gameplay accents<br><br>"
-                "Hold/sustain detection is still a separate milestone; this patch is focused "
-                "on making beat density, micro-bumps, and gameplay response visibly testable.",
+                "Blocks/spikes/pads/orbs = phrase-level gameplay<br><br>"
+                "This version is now dataset-informed: the mix of phrase types and "
+                "subdivision density comes from exported human levels instead of being "
+                "picked entirely by hand.",
                 generation.createdObjects,
                 generation.usedBeats,
+                generation.structuredBlocks,
+                generation.gameplayEvents,
+                generation.phraseCount,
                 generation.usedMicroOnsets,
-                generation.gameplayEvents
+                learningLine
             ),
             "OK"
         )->show();
