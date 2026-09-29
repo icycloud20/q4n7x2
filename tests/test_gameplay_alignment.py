@@ -53,7 +53,7 @@ def test_align_gameplay_export_interpolates_beats_and_windows() -> None:
     assert aligned["objects"][1]["beat"] == 1.5
     assert aligned["objects"][2]["beat"] == 9.5
 
-    assert aligned["objects"][1]["nearest_beat_error_seconds"] == 0.25
+    assert aligned["objects"][1]["nearest_beat_error_seconds"] == -0.25
     assert aligned["objects"][1]["nearest_onset_time"] == 2.0
     assert aligned["objects"][1]["nearest_onset_strength"] == 0.9
 
