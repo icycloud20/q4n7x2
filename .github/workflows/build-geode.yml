@@ -1,0 +1,53 @@
+name: GD AI Editor - Windows
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build bundled .geode
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install "pyinstaller>=6,<7"
+
+      - name: Build standalone audio backend
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --name gd-ai-backend --collect-all librosa --collect-all soundfile --distpath backend-dist --workpath backend-build --specpath backend-build backend_entry.py
+          Copy-Item "backend-dist\gd-ai-backend.exe" "geode\resources\gd-ai-backend.exe" -Force
+          Get-Item "geode\resources\gd-ai-backend.exe" | Format-List FullName,Length
+
+      - name: Build Geode mod
+        id: geode-build
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          path: geode
+          sdk: given
+          target: Win64
+          build-config: Release
+
+      - name: Upload .geode
+        uses: actions/upload-artifact@v4
+        with:
+          name: gd-ai-editor-windows
+          path: ${{ steps.geode-build.outputs.build-output }}
+          if-no-files-found: error
