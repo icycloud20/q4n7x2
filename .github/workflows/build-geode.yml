@@ -74,6 +74,45 @@ jobs:
           }
           Get-Content "backend-build\smoke.json" -TotalCount 20
 
+          @'
+          {
+            "schema_version": 1,
+            "level": {
+              "name": "CI Smoke Test",
+              "song_offset_seconds": 0.0
+            },
+            "objects": [
+              {
+                "unique_id": 1,
+                "object_id": 1,
+                "category": "solid",
+                "x": 100.0,
+                "y": 105.0,
+                "audio_time_seconds": 1.0
+              },
+              {
+                "unique_id": 2,
+                "object_id": 36,
+                "category": "orb",
+                "x": 200.0,
+                "y": 165.0,
+                "audio_time_seconds": 1.75
+              }
+            ]
+          }
+          '@ | Set-Content "backend-build\gameplay-smoke.json"
+
+          & "backend-dist\gd-ai-backend.exe" gameplay align "backend-build\gameplay-smoke.json" "backend-build\smoke.json" --out "backend-build\gameplay-aligned.json"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Standalone gameplay alignment smoke test failed with exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path "backend-build\gameplay-aligned.json")) {
+              throw "Standalone backend did not create gameplay-aligned.json"
+          }
+          Select-String -Path "backend-build\gameplay-aligned.json" -Pattern '"beat"' -Quiet | ForEach-Object {
+              if (-not $_) { throw "Gameplay alignment output does not contain beat coordinates" }
+          }
+
       - name: Build Geode mod
         id: geode-build
         uses: geode-sdk/build-geode-mod@main
