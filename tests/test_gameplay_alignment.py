@@ -128,3 +128,48 @@ def test_align_gameplay_export_reconstructs_player_state() -> None:
     assert aligned["objects"][2]["state_after"]["mini"] is True
     assert aligned["objects"][3]["state_after"]["speed"] == "fast"
     assert aligned["player_state"]["transition_count"] == 3
+
+
+def test_align_gameplay_export_classifies_visual_and_motion_roles() -> None:
+    analysis = {
+        "beats": [{"time": 0.0}, {"time": 0.5}, {"time": 1.0}, {"time": 1.5}],
+        "onsets": [],
+    }
+    gameplay = {
+        "schema_version": 1,
+        "objects": [
+            {
+                "unique_id": 1,
+                "object_id": 1,
+                "object_type": "solid",
+                "category": "solid",
+                "x": 30.0,
+                "audio_time_seconds": 0.25,
+            },
+            {
+                "unique_id": 2,
+                "object_id": 1006,
+                "object_type": "modifier",
+                "category": "modifier",
+                "x": 60.0,
+                "audio_time_seconds": 0.5,
+            },
+            {
+                "unique_id": 3,
+                "object_id": 901,
+                "object_type": "modifier",
+                "category": "modifier",
+                "x": 90.0,
+                "audio_time_seconds": 0.75,
+            },
+        ],
+    }
+
+    aligned = align_gameplay_export(gameplay, analysis)
+
+    assert aligned["objects"][0]["dataset_role"] == "gameplay"
+    assert aligned["objects"][1]["dataset_role"] == "visual"
+    assert aligned["objects"][1]["dataset_role_detail"] == "pulse"
+    assert aligned["objects"][2]["dataset_role"] == "motion"
+    assert aligned["objects"][2]["dataset_role_detail"] == "move"
+    assert aligned["windows"][0]["role_counts"]["visual"] == 1
