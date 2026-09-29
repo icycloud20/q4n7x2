@@ -47,14 +47,23 @@ _SPEED_PORTAL_IDS = {
 }
 
 _VISUAL_TRIGGER_IDS = {
+    32: "enable_trail",
+    33: "disable_trail",
+    899: "color",
     1006: "pulse",
     1007: "alpha",
+    1520: "shake",
+    1612: "hide_player",
+    1613: "show_player",
+    1818: "background_effect_on",
+    1819: "background_effect_off",
 }
 
 _MOTION_TRIGGER_IDS = {
     901: "move",
     1346: "rotate",
     1347: "follow",
+    1814: "follow_player_y",
     2067: "scale",
     3032: "keyframe_object",
     3033: "keyframe_animation",
@@ -63,8 +72,13 @@ _MOTION_TRIGGER_IDS = {
 _LOGIC_TRIGGER_IDS = {
     1049: "toggle",
     1268: "spawn",
+    1595: "touch",
+    1611: "count",
     1616: "stop",
+    1811: "instant_count",
+    1812: "on_death",
     1815: "collision",
+    1817: "pickup",
     1912: "random",
     2068: "advanced_random",
     3614: "time",
