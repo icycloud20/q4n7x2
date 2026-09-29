@@ -8,6 +8,138 @@ from pathlib import Path
 from typing import Any
 
 
+
+_MODE_BY_START_VALUE = {
+    0: "cube",
+    1: "ship",
+    2: "ball",
+    3: "ufo",
+    4: "wave",
+    5: "robot",
+    6: "spider",
+    7: "swing",
+    8: "jetpack",
+}
+
+_SPEED_BY_START_VALUE = {
+    0: "normal",
+    1: "slow",
+    2: "fast",
+    3: "faster",
+    4: "fastest",
+}
+
+_MODE_PORTALS = {
+    "cube_portal": "cube",
+    "ship_portal": "ship",
+    "ball_portal": "ball",
+    "ufo_portal": "ufo",
+    "wave_portal": "wave",
+    "robot_portal": "robot",
+    "spider_portal": "spider",
+    "swing_portal": "swing",
+}
+
+_SPEED_PORTAL_IDS = {
+    200: "slow",
+    201: "normal",
+    202: "fast",
+    203: "faster",
+    1334: "fastest",
+}
+
+
+def _initial_player_state(gameplay: dict[str, Any]) -> dict[str, Any]:
+    level = gameplay.get("level")
+    if not isinstance(level, dict):
+        level = {}
+
+    start_mode = level.get("start_mode", 0)
+    start_speed = level.get("start_speed", 0)
+
+    mode = _MODE_BY_START_VALUE.get(start_mode, "cube")
+    speed = _SPEED_BY_START_VALUE.get(start_speed, "normal")
+
+    return {
+        "mode": mode,
+        "gravity": "normal",
+        "mini": bool(level.get("start_mini", False)),
+        "dual": bool(level.get("start_dual", False)),
+        "mirror": bool(level.get("start_mirror", False)),
+        "speed": speed,
+    }
+
+
+def _apply_state_change(state: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(state)
+    object_type = str(item.get("object_type", ""))
+    object_id = item.get("object_id")
+
+    if object_type in _MODE_PORTALS:
+        updated["mode"] = _MODE_PORTALS[object_type]
+    elif object_type == "inverse_gravity_portal":
+        updated["gravity"] = "inverted"
+    elif object_type == "normal_gravity_portal":
+        updated["gravity"] = "normal"
+    elif object_type == "gravity_toggle_portal":
+        updated["gravity"] = (
+            "normal" if updated["gravity"] == "inverted" else "inverted"
+        )
+    elif object_type == "mini_portal":
+        updated["mini"] = True
+    elif object_type == "normal_size_portal":
+        updated["mini"] = False
+    elif object_type == "dual_portal":
+        updated["dual"] = True
+    elif object_type == "solo_portal":
+        updated["dual"] = False
+    elif object_type == "mirror_on_portal":
+        updated["mirror"] = True
+    elif object_type == "mirror_off_portal":
+        updated["mirror"] = False
+
+    if isinstance(object_id, int) and object_id in _SPEED_PORTAL_IDS:
+        updated["speed"] = _SPEED_PORTAL_IDS[object_id]
+
+    return updated
+
+
+def _annotate_player_state(
+    gameplay: dict[str, Any],
+    objects: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    state = _initial_player_state(gameplay)
+    transitions: list[dict[str, Any]] = []
+    annotated: list[dict[str, Any]] = []
+
+    for item in objects:
+        before = dict(state)
+        after = _apply_state_change(before, item)
+
+        item["state_before"] = before
+        item["state_after"] = after
+
+        if after != before:
+            transitions.append(
+                {
+                    "object_index": len(annotated),
+                    "unique_id": item.get("unique_id"),
+                    "object_id": item.get("object_id"),
+                    "object_type": item.get("object_type"),
+                    "x": item.get("x"),
+                    "level_time_seconds": item.get("level_time_seconds"),
+                    "audio_time_seconds": item.get("audio_time_seconds"),
+                    "beat": item.get("beat"),
+                    "before": before,
+                    "after": after,
+                }
+            )
+
+        state = after
+        annotated.append(item)
+
+    return annotated, transitions
+
 def load_json(path: str | Path) -> dict[str, Any]:
     source = Path(path)
     with source.open("r", encoding="utf-8") as handle:
@@ -233,7 +365,15 @@ def align_gameplay_export(
         )
     )
 
+    aligned_objects, state_transitions = _annotate_player_state(gameplay, aligned_objects)
+
     result["objects"] = aligned_objects
+    result["player_state"] = {
+        "schema_version": 1,
+        "initial": _initial_player_state(gameplay),
+        "transition_count": len(state_transitions),
+        "transitions": state_transitions,
+    }
     result["alignment"] = {
         "schema_version": 1,
         "beat_count": len(beat_times),
