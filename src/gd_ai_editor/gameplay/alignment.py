@@ -7,8 +7,6 @@ import math
 from pathlib import Path
 from typing import Any
 
-
-
 _MODE_BY_START_VALUE = {
     0: "cube",
     1: "ship",
@@ -47,6 +45,56 @@ _SPEED_PORTAL_IDS = {
     203: "faster",
     1334: "fastest",
 }
+
+_VISUAL_TRIGGER_IDS = {
+    1006: "pulse",
+    1007: "alpha",
+}
+
+_MOTION_TRIGGER_IDS = {
+    901: "move",
+    1346: "rotate",
+    1347: "follow",
+    2067: "scale",
+    3032: "keyframe_object",
+    3033: "keyframe_animation",
+}
+
+_LOGIC_TRIGGER_IDS = {
+    1049: "toggle",
+    1268: "spawn",
+    1616: "stop",
+    1815: "collision",
+    1912: "random",
+    2068: "advanced_random",
+    3614: "time",
+    3615: "time_event",
+    3617: "time_control",
+}
+
+
+def _dataset_role(item: dict[str, Any]) -> tuple[str, str]:
+    category = str(item.get("category", "other"))
+    object_id = item.get("object_id")
+
+    if category in {"solid", "hazard", "orb", "pad", "portal", "collision"}:
+        return "gameplay", category
+
+    if isinstance(object_id, int):
+        if object_id in _SPEED_PORTAL_IDS:
+            return "gameplay", "speed"
+        if object_id in _VISUAL_TRIGGER_IDS:
+            return "visual", _VISUAL_TRIGGER_IDS[object_id]
+        if object_id in _MOTION_TRIGGER_IDS:
+            return "motion", _MOTION_TRIGGER_IDS[object_id]
+        if object_id in _LOGIC_TRIGGER_IDS:
+            return "logic", _LOGIC_TRIGGER_IDS[object_id]
+
+    if category == "modifier":
+        return "modifier", "unknown"
+
+    return "other", category
+
 
 
 def _initial_player_state(gameplay: dict[str, Any]) -> dict[str, Any]:
@@ -287,9 +335,12 @@ def _build_windows(
 
         if indices:
             categories: dict[str, int] = {}
+            roles: dict[str, int] = {}
             for index in indices:
                 category = str(objects[index].get("category", "other"))
+                role = str(objects[index].get("dataset_role", "other"))
                 categories[category] = categories.get(category, 0) + 1
+                roles[role] = roles.get(role, 0) + 1
 
             windows.append(
                 {
@@ -299,6 +350,7 @@ def _build_windows(
                     "object_indices": indices,
                     "object_count": len(indices),
                     "category_counts": categories,
+                    "role_counts": roles,
                 }
             )
             window_index += 1
@@ -341,6 +393,10 @@ def align_gameplay_export(
         nearest_beat_index = _nearest_index(beat_times, audio_time_float)
 
         item["beat"] = round(beat, 6)
+
+        role, role_detail = _dataset_role(item)
+        item["dataset_role"] = role
+        item["dataset_role_detail"] = role_detail
 
         if nearest_beat_index is not None:
             nearest_beat_time = beat_times[nearest_beat_index]
