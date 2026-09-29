@@ -442,22 +442,19 @@ class $modify(GDAIEditorUI, EditorUI) {
             : std::string("Learned structure: <cr>fallback only</c>");
 
         FLAlertLayer::create(
-            "Structural Generator v2",
+            "Structural Generator v2.1",
             fmt::format(
                 "Created <cg>{}</c> objects across <cy>{}</c> main beats.<br>"
                 "Built <co>{}</c> structural objects and <co>{}</c> gameplay interactions "
-                "across <cy>{}</c> learned chunks.<br>"
-                "Surfaced <cp>{}</c> strong off-beat onsets.<br><br>"
+                "across <cy>{}</c> learned chunks.<br><br>"
                 "{}<br>"
                 "Phrase/rhythm prior: <cy>{}</c> cube phrases.<br><br>"
-                "<cy>Yellow orbs</c> = beat debug lane<br>"
-                "<cp>Pink orbs</c> = strong micro-onsets",
+                "Debug beat/orb lanes are now disabled for clean playtesting.",
                 generation.createdObjects,
                 generation.usedBeats,
                 generation.structuredBlocks,
                 generation.gameplayEvents,
                 generation.phraseCount,
-                generation.usedMicroOnsets,
                 learningLine,
                 generation.learnedSourcePhrases
             ),
