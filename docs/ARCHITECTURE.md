@@ -194,3 +194,14 @@ M0 is deliberately only the audio side.
 Before downloading thousands of levels or training anything, verify that timing extraction is stable on songs used by Geometry Dash. If our beat grid drifts, every future training pair will be mislabeled.
 
 After M0 passes, M1 is the level/gameplay parser.
+
+
+## Phrase Generator v2
+
+The in-editor cube generator now keeps a persistent path height across four-beat phrases.
+Raised platforms carry into following phrases, quiet phrases can descend toward the ground,
+and spikes / pads / orbs are positioned relative to the current gameplay surface.
+
+Phrase selection remains dataset-informed by the bundled cube phrase profile learned from
+the current aligned training exports. The beat and micro-onset lanes remain temporary debug
+visuals while playability and phrase continuity are being validated.
