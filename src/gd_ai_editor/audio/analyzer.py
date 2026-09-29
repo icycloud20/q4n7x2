@@ -4,6 +4,7 @@ from pathlib import Path
 
 import librosa
 import numpy as np
+import soundfile as sf
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
@@ -152,6 +153,40 @@ def _estimate_sections(
         )
 
     return sections
+
+
+def write_beat_preview(
+    source_path: str | Path,
+    beat_times: list[float] | np.ndarray,
+    output_path: str | Path,
+    *,
+    click_gain: float = 0.35,
+) -> Path:
+    """Write a copy of the song with audible clicks on detected beats."""
+    source = Path(source_path).expanduser().resolve()
+    output = Path(output_path).expanduser().resolve()
+
+    waveform, sample_rate = librosa.load(source, sr=None, mono=True)
+    if waveform.size == 0:
+        raise ValueError(f"Audio file is empty: {source}")
+
+    peak = float(np.max(np.abs(waveform)))
+    if peak > 0:
+        waveform = waveform / peak * 0.72
+
+    times = np.asarray(beat_times, dtype=np.float64)
+    clicks = librosa.clicks(
+        times=times,
+        sr=sample_rate,
+        length=waveform.size,
+        click_freq=1800.0,
+        click_duration=0.025,
+    )
+
+    preview = np.clip(waveform + clicks * click_gain, -1.0, 1.0)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(output, preview, sample_rate)
+    return output
 
 
 def analyze_audio(
