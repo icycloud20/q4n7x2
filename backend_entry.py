@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from gd_ai_editor.cli import main
 
 
