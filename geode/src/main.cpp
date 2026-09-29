@@ -4,7 +4,10 @@
 #include <Geode/ui/BasedButtonSprite.hpp>
 #include <Geode/ui/Notification.hpp>
 
+#include "GameplayExport.hpp"
+
 #include <atomic>
+#include <chrono>
 #ifdef GEODE_IS_WINDOWS
 #include <Windows.h>
 #endif
@@ -133,13 +136,15 @@ std::wstring quoteWindowsArgument(std::wstring const& value) {
     return escaped;
 }
 
-int runBackendProcess(
-    std::filesystem::path const& backendPath,
-    std::filesystem::path const& audioPath,
-    std::filesystem::path const& analysisPath,
-    std::filesystem::path const& previewPath,
+int runWindowsCommand(
+    std::vector<std::wstring> const& arguments,
+    std::filesystem::path const& workingDirectory,
     std::filesystem::path const& logPath
 ) {
+    if (arguments.empty()) {
+        return -1;
+    }
+
     SECURITY_ATTRIBUTES securityAttributes{};
     securityAttributes.nLength = sizeof(securityAttributes);
     securityAttributes.bInheritHandle = TRUE;
@@ -159,18 +164,6 @@ int runBackendProcess(
     }
 
     SetFilePointer(logHandle, 0, nullptr, FILE_END);
-
-    std::vector<std::wstring> arguments = {
-        backendPath.wstring(),
-        L"audio",
-        L"analyze",
-        audioPath.wstring(),
-        L"--out",
-        analysisPath.wstring(),
-        L"--beat-preview",
-        previewPath.wstring(),
-        L"--summary",
-    };
 
     std::wstring commandLine;
     for (std::size_t index = 0; index < arguments.size(); ++index) {
@@ -193,14 +186,14 @@ int runBackendProcess(
     std::wstring mutableCommandLine = commandLine;
 
     BOOL created = CreateProcessW(
-        backendPath.c_str(),
+        arguments.front().c_str(),
         mutableCommandLine.data(),
         nullptr,
         nullptr,
         TRUE,
         CREATE_NO_WINDOW,
         nullptr,
-        backendPath.parent_path().c_str(),
+        workingDirectory.c_str(),
         &startupInfo,
         &processInfo
     );
@@ -229,7 +222,81 @@ int runBackendProcess(
 
     return static_cast<int>(exitCode);
 }
+
+int runBackendProcess(
+    std::filesystem::path const& backendPath,
+    std::filesystem::path const& audioPath,
+    std::filesystem::path const& analysisPath,
+    std::filesystem::path const& previewPath,
+    std::filesystem::path const& logPath
+) {
+    return runWindowsCommand(
+        {
+            backendPath.wstring(),
+            L"audio",
+            L"analyze",
+            audioPath.wstring(),
+            L"--out",
+            analysisPath.wstring(),
+            L"--beat-preview",
+            previewPath.wstring(),
+            L"--summary",
+        },
+        backendPath.parent_path(),
+        logPath
+    );
+}
+
+int runGameplayAlignProcess(
+    std::filesystem::path const& backendPath,
+    std::filesystem::path const& rawGameplayPath,
+    std::filesystem::path const& analysisPath,
+    std::filesystem::path const& alignedGameplayPath,
+    std::filesystem::path const& logPath
+) {
+    return runWindowsCommand(
+        {
+            backendPath.wstring(),
+            L"gameplay",
+            L"align",
+            rawGameplayPath.wstring(),
+            analysisPath.wstring(),
+            L"--out",
+            alignedGameplayPath.wstring(),
+        },
+        backendPath.parent_path(),
+        logPath
+    );
+}
+
 #endif
+
+
+std::string exportStem(GJGameLevel* level) {
+    std::string name = level ? std::string(level->m_levelName) : "level";
+
+    for (char& character : name) {
+        bool safe =
+            (character >= 'a' && character <= 'z')
+            || (character >= 'A' && character <= 'Z')
+            || (character >= '0' && character <= '9')
+            || character == '-'
+            || character == '_';
+
+        if (!safe) {
+            character = '_';
+        }
+    }
+
+    if (name.empty()) {
+        name = "level";
+    }
+
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+
+    return fmt::format("{}-{}", name, milliseconds);
+}
 
 void showNotification(std::string const& message, NotificationIcon icon, float duration = 3.0f) {
     Notification::create(message, icon, duration)->show();
