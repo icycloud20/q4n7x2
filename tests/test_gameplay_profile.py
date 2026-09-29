@@ -46,7 +46,7 @@ def test_build_motif_profile_learns_phrase_combinations() -> None:
 
     assert profile["source_levels"] == ["A", "B"]
     assert profile["source_level_count"] == 2
-    assert profile["source_object_count"] == 13
+    assert profile["source_object_count"] == 14
     assert profile["cube_phrase_count"] == 4
 
     weights = profile["template_weights"]
