@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
 import librosa
@@ -75,7 +76,7 @@ def _estimate_sections(
     smoothed_onset = gaussian_filter1d(onset_curve, sigma=4)
     smoothed_centroid = gaussian_filter1d(centroid_curve, sigma=4)
 
-    lag_frames = max(1, int(round(1.0 / step)))
+    lag_frames = max(1, round(1.0 / step))
 
     def lagged_change(curve: np.ndarray) -> np.ndarray:
         change = np.zeros_like(curve)
@@ -91,7 +92,7 @@ def _estimate_sections(
     novelty = gaussian_filter1d(novelty, sigma=2)
 
     minimum_section_seconds = 6.0
-    peak_distance = max(1, int(round(minimum_section_seconds / step)))
+    peak_distance = max(1, round(minimum_section_seconds / step))
     prominence = max(0.02, float(np.percentile(novelty, 75)) * 0.55)
 
     peaks, properties = find_peaks(
@@ -122,9 +123,7 @@ def _estimate_sections(
         cleaned_boundaries.append(duration)
 
     sections: list[SectionFeature] = []
-    for section_index, (start, end) in enumerate(
-        zip(cleaned_boundaries[:-1], cleaned_boundaries[1:], strict=True)
-    ):
+    for section_index, (start, end) in enumerate(pairwise(cleaned_boundaries)):
         mask = (timeline >= start) & (timeline < end)
         if not np.any(mask):
             mean_energy = 0.0
