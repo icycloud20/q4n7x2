@@ -159,9 +159,16 @@ def write_beat_preview(
     beat_times: list[float] | np.ndarray,
     output_path: str | Path,
     *,
-    click_gain: float = 0.35,
+    beat_strengths: list[float] | np.ndarray | None = None,
+    click_gain: float = 0.62,
+    accent_gain: float = 0.90,
 ) -> Path:
-    """Write a copy of the song with audible clicks on detected beats."""
+    """Write a clearly audible beat-check preview over the original song.
+
+    Regular beats use a short bright tick. Every four-beat group also gets one
+    lower, louder accent on the strongest detected beat in that group. This is
+    only a debugging preview; it is not an input/hold prediction.
+    """
     source = Path(source_path).expanduser().resolve()
     output = Path(output_path).expanduser().resolve()
 
@@ -171,18 +178,69 @@ def write_beat_preview(
 
     peak = float(np.max(np.abs(waveform)))
     if peak > 0:
-        waveform = waveform / peak * 0.72
+        # Leave headroom for the click track while keeping the music easy to hear.
+        waveform = waveform / peak * 0.64
 
     times = np.asarray(beat_times, dtype=np.float64)
-    clicks = librosa.clicks(
+    times = times[np.isfinite(times)]
+    times = times[(times >= 0.0) & (times < waveform.size / sample_rate)]
+
+    regular_clicks = librosa.clicks(
         times=times,
         sr=sample_rate,
         length=waveform.size,
-        click_freq=1800.0,
-        click_duration=0.025,
+        click_freq=2400.0,
+        click_duration=0.032,
     )
 
-    preview = np.clip(waveform + clicks * click_gain, -1.0, 1.0)
+    if beat_strengths is None:
+        strengths = np.ones(times.size, dtype=np.float64)
+    else:
+        strengths = np.asarray(beat_strengths, dtype=np.float64)
+        strengths = strengths[: times.size]
+        if strengths.size < times.size:
+            strengths = np.pad(strengths, (0, times.size - strengths.size), constant_values=1.0)
+
+    accent_indices: list[int] = []
+    for start in range(0, times.size, 4):
+        end = min(start + 4, times.size)
+        if end <= start:
+            continue
+
+        local = strengths[start:end]
+        accent_indices.append(start + int(np.argmax(local)))
+
+    accent_times = times[np.asarray(accent_indices, dtype=np.int64)] if accent_indices else np.array([])
+    accent_clicks = librosa.clicks(
+        times=accent_times,
+        sr=sample_rate,
+        length=waveform.size,
+        click_freq=1050.0,
+        click_duration=0.045,
+    )
+
+    # A tiny local duck around each beat makes the debug ticks readable even
+    # through dense drops without making the entire song much quieter.
+    duck = np.ones(waveform.size, dtype=np.float32)
+    duck_half_width = max(1, int(sample_rate * 0.018))
+    for beat_time in times:
+        center = int(round(beat_time * sample_rate))
+        start = max(0, center - duck_half_width)
+        end = min(waveform.size, center + duck_half_width)
+        if end <= start:
+            continue
+
+        window = np.hanning((end - start) * 2)[end - start :]
+        duck[start:end] *= (1.0 - 0.12 * window.astype(np.float32))
+
+    preview = np.clip(
+        waveform * duck
+        + regular_clicks * click_gain
+        + accent_clicks * accent_gain,
+        -1.0,
+        1.0,
+    )
+
     output.parent.mkdir(parents=True, exist_ok=True)
     sf.write(output, preview, sample_rate)
     return output
