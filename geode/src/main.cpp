@@ -22,6 +22,7 @@ using namespace geode::prelude;
 
 namespace {
 std::atomic_bool g_analysisRunning = false;
+std::atomic_bool g_exportRunning = false;
 
 std::filesystem::path findExistingFile(std::vector<std::filesystem::path> const& candidates) {
     std::error_code error;
@@ -317,32 +318,224 @@ class $modify(GDAIEditorUI, EditorUI) {
             return true;
         }
 
-        auto buttonSprite = EditorButtonSprite::createWithSpriteFrameName(
+        auto analyzeSprite = EditorButtonSprite::createWithSpriteFrameName(
             "GJ_musicOnBtn_001.png",
             0.55f,
             EditorBaseColor::LightBlue
         );
+        auto exportSprite = EditorButtonSprite::createWithSpriteFrameName(
+            "GJ_editBtn_001.png",
+            0.42f,
+            EditorBaseColor::LightBlue
+        );
 
-        if (!buttonSprite) {
-            log::error("GD AI Editor could not create its editor button sprite");
+        if (!analyzeSprite || !exportSprite) {
+            log::error("GD AI Editor could not create its editor button sprites");
             return true;
         }
 
-        auto button = CCMenuItemSpriteExtra::create(
-            buttonSprite,
+        auto analyzeButton = CCMenuItemSpriteExtra::create(
+            analyzeSprite,
             this,
             menu_selector(GDAIEditorUI::onGDAIEditor)
         );
+        auto exportButton = CCMenuItemSpriteExtra::create(
+            exportSprite,
+            this,
+            menu_selector(GDAIEditorUI::onExportGameplay)
+        );
 
-        button->setID("analyze-song-button"_spr);
-        menu->addChild(button);
+        analyzeButton->setID("analyze-song-button"_spr);
+        exportButton->setID("export-gameplay-button"_spr);
+
+        menu->addChild(analyzeButton);
+        menu->addChild(exportButton);
         menu->updateLayout();
 
         if (this->m_uiItems) {
-            this->m_uiItems->addObject(button);
+            this->m_uiItems->addObject(analyzeButton);
+            this->m_uiItems->addObject(exportButton);
         }
 
         return true;
+    }
+
+    void onExportGameplay(CCObject*) {
+        if (g_exportRunning.exchange(true)) {
+            showNotification("Gameplay export is already running.", NotificationIcon::Info);
+            return;
+        }
+
+        auto finishEarly = [] {
+            g_exportRunning = false;
+        };
+
+        auto* editorLayer = this->m_editorLayer;
+        auto* level = editorLayer ? editorLayer->m_level : nullptr;
+
+        if (!editorLayer || !level) {
+            finishEarly();
+            FLAlertLayer::create(
+                "GD AI Editor",
+                "Could not read the current editor level.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto audioPath = resolveAudioPath(level);
+        if (audioPath.empty()) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Song Not Found",
+                "Download this level's song in Geometry Dash first.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto backendPath = Mod::get()->getResourcesDir() / "gd-ai-backend.exe";
+        if (!std::filesystem::exists(backendPath)) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Backend Missing",
+                "The bundled GD AI backend is missing from this build.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto songDirectory = Mod::get()->getSaveDir() / "song-cache" / makeSongKey(level);
+        auto signature = makeFileSignature(audioPath);
+        constexpr auto cacheVersion = "v2";
+        auto analysisPath =
+            songDirectory / ("analysis-" + std::string(cacheVersion) + "-" + signature + ".json");
+
+        if (!std::filesystem::exists(analysisPath)) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Analyze Song First",
+                "Press the <cy>music-note</c> GD AI button once before exporting gameplay.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto exportDirectory = Mod::get()->getSaveDir() / "gameplay-exports";
+        auto stem = exportStem(level);
+        auto rawGameplayPath = exportDirectory / (stem + "-raw.json");
+        auto alignedGameplayPath = exportDirectory / (stem + "-aligned.json");
+        auto logPath = exportDirectory / (stem + "-align.log");
+
+        auto exportResult = exportGameplayTimeline(editorLayer, rawGameplayPath);
+        if (!exportResult.success) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Gameplay Export Failed",
+                exportResult.error,
+                "OK"
+            )->show();
+            return;
+        }
+
+        showNotification(
+            fmt::format("Exported {} gameplay objects. Aligning...", exportResult.exportedObjects),
+            NotificationIcon::Loading,
+            3.0f
+        );
+
+        log::info(
+            "Exported {}/{} gameplay objects to {}",
+            exportResult.exportedObjects,
+            exportResult.totalObjects,
+            rawGameplayPath.string()
+        );
+
+        std::thread([
+            backendPath,
+            rawGameplayPath,
+            analysisPath,
+            alignedGameplayPath,
+            logPath,
+            exportedObjects = exportResult.exportedObjects
+        ] {
+            {
+                std::ofstream logFile(logPath, std::ios::out | std::ios::trunc);
+                if (logFile) {
+                    logFile
+                        << "GD AI Editor gameplay alignment\n"
+                        << "Raw gameplay: " << rawGameplayPath.string() << "\n"
+                        << "Analysis: " << analysisPath.string() << "\n"
+                        << "Aligned gameplay: " << alignedGameplayPath.string() << "\n\n";
+                }
+            }
+
+#ifdef GEODE_IS_WINDOWS
+            int exitCode = runGameplayAlignProcess(
+                backendPath,
+                rawGameplayPath,
+                analysisPath,
+                alignedGameplayPath,
+                logPath
+            );
+#else
+            int exitCode = -1;
+#endif
+
+            bool success = exitCode == 0 && std::filesystem::exists(alignedGameplayPath);
+            g_exportRunning = false;
+
+            Loader::get()->queueInMainThread([
+                success,
+                exitCode,
+                rawGameplayPath,
+                alignedGameplayPath,
+                logPath,
+                exportedObjects
+            ] {
+                if (success) {
+                    showNotification(
+                        fmt::format("Aligned {} gameplay objects to the song.", exportedObjects),
+                        NotificationIcon::Success,
+                        4.0f
+                    );
+
+                    log::info("Aligned gameplay export: {}", alignedGameplayPath.string());
+
+                    FLAlertLayer::create(
+                        "Gameplay Export Ready",
+                        fmt::format(
+                            "Exported <cg>{}</c> gameplay objects and aligned them to detected beats.<br><br>Output folder:<br><cy>{}</c>",
+                            exportedObjects,
+                            alignedGameplayPath.parent_path().string()
+                        ),
+                        "OK"
+                    )->show();
+                } else {
+                    showNotification(
+                        "Gameplay alignment failed.",
+                        NotificationIcon::Error,
+                        5.0f
+                    );
+
+                    log::error(
+                        "Gameplay alignment failed with exit code {}. Log: {}",
+                        exitCode,
+                        logPath.string()
+                    );
+
+                    FLAlertLayer::create(
+                        "Gameplay Alignment Failed",
+                        fmt::format(
+                            "Backend exit code: <cr>{}</c><br><br>Log:<br><cy>{}</c>",
+                            exitCode,
+                            logPath.string()
+                        ),
+                        "OK"
+                    )->show();
+                }
+            });
+        }).detach();
     }
 
     void onGDAIEditor(CCObject*) {
