@@ -11,13 +11,16 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <string>
 #include <vector>
 
 using namespace geode::prelude;
 
 namespace {
 constexpr float kGroundY = 105.0f;
-constexpr std::size_t kMaximumPreviewBeats = 96;
+constexpr float kGroundSurfaceY = 90.0f;
+constexpr float kGroundPadY = 92.0f;
+constexpr std::size_t kMaximumPreviewBeats = 128;
 
 struct BeatSample {
     double time = 0.0;
@@ -35,6 +38,30 @@ struct AnalysisData {
     std::vector<OnsetSample> onsets;
 };
 
+enum class PhraseTemplate {
+    HazardOrbPad,
+    HazardPad,
+    HazardOrb,
+    HazardOnly,
+    PadOnly,
+    Quiet,
+};
+
+struct LearnedProfile {
+    bool loaded = false;
+    std::size_t sourceLevels = 0;
+    std::size_t sourcePhrases = 0;
+    int recommendedMaxEvents = 3;
+    double denseSubdivisionWeight = 0.0;
+
+    double hazardOrbPad = 0.48;
+    double hazardPad = 0.16;
+    double hazardOrb = 0.14;
+    double hazardOnly = 0.16;
+    double padOnly = 0.03;
+    double quiet = 0.03;
+};
+
 bool addGeneratedObject(
     LevelEditorLayer* editorLayer,
     int objectID,
@@ -45,6 +72,62 @@ bool addGeneratedObject(
     }
 
     return editorLayer->createObject(objectID, position, true) != nullptr;
+}
+
+bool addCountedObject(
+    LevelEditorLayer* editorLayer,
+    int objectID,
+    CCPoint const& position,
+    std::size_t& createdObjects,
+    std::size_t& gameplayEvents
+) {
+    if (!addGeneratedObject(editorLayer, objectID, position)) {
+        return false;
+    }
+
+    ++createdObjects;
+    ++gameplayEvents;
+    return true;
+}
+
+std::size_t addBlockColumn(
+    LevelEditorLayer* editorLayer,
+    float x,
+    int height,
+    std::size_t& createdObjects
+) {
+    std::size_t added = 0;
+
+    for (int index = 0; index < height; ++index) {
+        float y = kGroundY + static_cast<float>(index * 30);
+        if (addGeneratedObject(editorLayer, 1, {x, y})) {
+            ++added;
+            ++createdObjects;
+        }
+    }
+
+    return added;
+}
+
+std::size_t addLowPlatform(
+    LevelEditorLayer* editorLayer,
+    float centerX,
+    int blockCount,
+    std::size_t& createdObjects
+) {
+    blockCount = std::clamp(blockCount, 1, 6);
+    float startX = centerX - static_cast<float>(blockCount - 1) * 15.0f;
+    std::size_t added = 0;
+
+    for (int index = 0; index < blockCount; ++index) {
+        float x = startX + static_cast<float>(index * 30);
+        if (addGeneratedObject(editorLayer, 1, {x, kGroundY})) {
+            ++added;
+            ++createdObjects;
+        }
+    }
+
+    return added;
 }
 
 AnalysisData readAnalysis(std::filesystem::path const& analysisPath, std::string& error) {
@@ -116,6 +199,70 @@ AnalysisData readAnalysis(std::filesystem::path const& analysisPath, std::string
     return analysis;
 }
 
+LearnedProfile readLearnedProfile() {
+    LearnedProfile profile;
+    auto profilePath = Mod::get()->getResourcesDir() / "learned-profile-v1.json";
+
+    std::ifstream input(profilePath);
+    if (!input) {
+        log::warn("Learned gameplay profile is missing: {}", profilePath.string());
+        return profile;
+    }
+
+    auto parsed = matjson::parse(input);
+    if (!parsed.isOk()) {
+        log::warn("Could not parse learned gameplay profile: {}", profilePath.string());
+        return profile;
+    }
+
+    auto root = parsed.unwrap();
+    auto weights = root["template_weights"];
+
+    profile.sourceLevels = static_cast<std::size_t>(
+        std::max(0.0, root["source_level_count"].asDouble().unwrapOr(0.0))
+    );
+    profile.sourcePhrases = static_cast<std::size_t>(
+        std::max(0.0, root["cube_phrase_count"].asDouble().unwrapOr(0.0))
+    );
+    profile.recommendedMaxEvents = std::clamp(
+        static_cast<int>(
+            root["recommended_max_events_per_phrase"].asDouble().unwrapOr(3.0)
+        ),
+        2,
+        6
+    );
+
+    profile.hazardOrbPad =
+        weights["hazard_orb_pad"].asDouble().unwrapOr(profile.hazardOrbPad);
+    profile.hazardPad =
+        weights["hazard_pad"].asDouble().unwrapOr(profile.hazardPad);
+    profile.hazardOrb =
+        weights["hazard_orb"].asDouble().unwrapOr(profile.hazardOrb);
+    profile.hazardOnly =
+        weights["hazard_only"].asDouble().unwrapOr(profile.hazardOnly);
+    profile.padOnly =
+        weights["pad_only"].asDouble().unwrapOr(profile.padOnly);
+    profile.quiet =
+        weights["quiet"].asDouble().unwrapOr(profile.quiet);
+
+    auto gapWeights = root["rhythm_gap_sixteenth_weights"];
+    profile.denseSubdivisionWeight =
+        gapWeights["1"].asDouble().unwrapOr(0.0)
+        + gapWeights["2"].asDouble().unwrapOr(0.0);
+
+    profile.loaded = profile.sourceLevels > 0 && profile.sourcePhrases > 0;
+
+    if (profile.loaded) {
+        log::info(
+            "Loaded learned phrase profile from {} levels / {} cube phrases",
+            profile.sourceLevels,
+            profile.sourcePhrases
+        );
+    }
+
+    return profile;
+}
+
 double beatScore(BeatSample const& beat) {
     return beat.onset * 0.72 + beat.energy * 0.28;
 }
@@ -160,7 +307,7 @@ double onsetThreshold(std::vector<OnsetSample> const& onsets) {
         strengths.push_back(onset.strength);
     }
 
-    std::size_t percentileIndex = strengths.size() * 65 / 100;
+    std::size_t percentileIndex = strengths.size() * 62 / 100;
     percentileIndex = std::min(percentileIndex, strengths.size() - 1);
     std::nth_element(
         strengths.begin(),
@@ -168,7 +315,65 @@ double onsetThreshold(std::vector<OnsetSample> const& onsets) {
         strengths.end()
     );
 
-    return std::max(0.12, strengths[percentileIndex]);
+    return std::max(0.10, strengths[percentileIndex]);
+}
+
+PhraseTemplate choosePhraseTemplate(
+    LearnedProfile const& profile,
+    std::size_t phraseIndex,
+    double phraseEnergy,
+    double phraseOnset
+) {
+    if (phraseEnergy < 0.13 && phraseOnset < 0.18) {
+        return PhraseTemplate::Quiet;
+    }
+
+    // Deterministic pseudo-random selector. It produces variety without making
+    // repeated presses on the same song completely unpredictable.
+    double selector = std::fmod(
+        static_cast<double>(phraseIndex + 1) * 0.61803398875
+        + phraseEnergy * 0.731
+        + phraseOnset * 0.413,
+        1.0
+    );
+
+    // Busy phrases lean toward the interaction combination that appeared most
+    // frequently in the learned cube phrases.
+    if (phraseEnergy > 0.74 && selector < 0.72) {
+        return PhraseTemplate::HazardOrbPad;
+    }
+
+    double total =
+        profile.hazardOrbPad
+        + profile.hazardPad
+        + profile.hazardOrb
+        + profile.hazardOnly
+        + profile.padOnly
+        + profile.quiet;
+
+    if (total <= 0.0) {
+        return PhraseTemplate::HazardOrbPad;
+    }
+
+    selector *= total;
+
+    if ((selector -= profile.hazardOrbPad) < 0.0) {
+        return PhraseTemplate::HazardOrbPad;
+    }
+    if ((selector -= profile.hazardPad) < 0.0) {
+        return PhraseTemplate::HazardPad;
+    }
+    if ((selector -= profile.hazardOrb) < 0.0) {
+        return PhraseTemplate::HazardOrb;
+    }
+    if ((selector -= profile.hazardOnly) < 0.0) {
+        return PhraseTemplate::HazardOnly;
+    }
+    if ((selector -= profile.padOnly) < 0.0) {
+        return PhraseTemplate::PadOnly;
+    }
+
+    return PhraseTemplate::Quiet;
 }
 }
 
@@ -184,19 +389,19 @@ BaselineGenerationResult generateBaselineLayout(
     }
 
     if (editorLayer->m_levelSettings->m_platformerMode) {
-        result.error = "The generator preview currently supports classic mode only.";
+        result.error = "The phrase generator currently supports classic mode only.";
         return result;
     }
 
     if (editorLayer->m_levelSettings->m_startMode != 0) {
-        result.error = "The generator preview currently supports cube start mode only.";
+        result.error = "The phrase generator currently supports cube start mode only.";
         return result;
     }
 
-    if (editorLayer->m_objects && editorLayer->m_objects->count() > 200) {
+    if (editorLayer->m_objects && editorLayer->m_objects->count() > 250) {
         result.error =
             "Use a mostly empty level for the generator preview. This safety check prevents "
-            "accidentally writing hundreds of objects into a finished level.";
+            "accidentally writing a generated section into a finished level.";
         return result;
     }
 
@@ -212,6 +417,11 @@ BaselineGenerationResult generateBaselineLayout(
         result.error = "Not enough detected beats to generate a preview.";
         return result;
     }
+
+    auto profile = readLearnedProfile();
+    result.learnedProfileLoaded = profile.loaded;
+    result.learnedSourceLevels = profile.sourceLevels;
+    result.learnedSourcePhrases = profile.sourcePhrases;
 
     double songOffset = editorLayer->m_levelSettings->m_songOffset;
     double minimumAudioTime = songOffset + 1.25;
@@ -263,29 +473,26 @@ BaselineGenerationResult generateBaselineLayout(
 
     std::size_t createdObjects = 0;
     std::size_t gameplayEvents = 0;
+    std::size_t structuredBlocks = 0;
 
-    // The editor's visible gameplay baseline is 90 units above the raw y=15
-    // row used by some old level-string examples. The previous preview exposed
-    // this clearly by placing everything three grid blocks too low.
+    // Debug beat lane. Keeping it for now makes timing regressions obvious while
+    // the actual gameplay below is generated in 4-beat phrases.
     constexpr std::array<float, 4> beatMarkerY = {
-        kGroundY + 60.0f,
-        kGroundY + 75.0f,
-        kGroundY + 90.0f,
-        kGroundY + 75.0f,
+        kGroundY + 150.0f,
+        kGroundY + 165.0f,
+        kGroundY + 180.0f,
+        kGroundY + 165.0f,
     };
 
-    // Yellow orb = main detected beat. This intentionally marks EVERY beat so
-    // timing drift is obvious instead of hidden behind a sparse obstacle pattern.
     for (std::size_t index = 0; index < beats.size(); ++index) {
         float beatX = positionForBeat(beats[index]).x;
         float markerY = beatMarkerY[index % beatMarkerY.size()];
 
-        createdObjects += addGeneratedObject(editorLayer, 36, {beatX, markerY}) ? 1 : 0;
+        if (addGeneratedObject(editorLayer, 36, {beatX, markerY})) {
+            ++createdObjects;
+        }
     }
 
-    // Pink orb = strong onset that is NOT already represented by a main beat.
-    // This surfaces smaller kicks, snares, taps, and "micro-bumps" detected by
-    // librosa without pretending they are full beats.
     std::vector<OnsetSample> usableOnsets;
     for (auto const& onset : analysis.onsets) {
         if (onset.time < beats.front().time || onset.time > beats.back().time) {
@@ -298,24 +505,28 @@ BaselineGenerationResult generateBaselineLayout(
     double previousMicroTime = -1000.0;
     std::size_t microIndex = 0;
 
+    // Strong off-beat transient lane. Human-level exports showed interaction
+    // clusters frequently separated by 1/16 and 1/8 beat, so the learned profile
+    // lets the preview retain dense micro-onsets instead of forcing everything
+    // onto quarter beats.
+    double minimumMicroSpacing =
+        profile.denseSubdivisionWeight >= 0.70 ? 0.060 : 0.085;
+
     for (auto const& onset : usableOnsets) {
         if (onset.strength < threshold) {
             continue;
         }
 
-        // Do not draw a second marker when an onset is effectively the same hit
-        // as a tracked beat.
-        if (nearestBeatDistance(beats, onset.time) < 0.095) {
+        if (nearestBeatDistance(beats, onset.time) < 0.090) {
             continue;
         }
 
-        // Prevent dense transient clusters from becoming an unreadable orb wall.
-        if (onset.time - previousMicroTime < 0.085) {
+        if (onset.time - previousMicroTime < minimumMicroSpacing) {
             continue;
         }
 
         float onsetX = positionForAudioTime(onset.time).x;
-        float onsetY = kGroundY + 120.0f + static_cast<float>((microIndex % 3) * 12);
+        float onsetY = kGroundY + 225.0f + static_cast<float>((microIndex % 3) * 12);
 
         if (addGeneratedObject(editorLayer, 141, {onsetX, onsetY})) {
             ++createdObjects;
@@ -324,88 +535,274 @@ BaselineGenerationResult generateBaselineLayout(
             previousMicroTime = onset.time;
         }
 
-        if (result.usedMicroOnsets >= 96) {
+        if (result.usedMicroOnsets >= 128) {
             break;
         }
     }
 
-    // Gameplay density follows local energy. Quiet phrases get a light event;
-    // energetic phrases get multiple hazards or pads. This is still deliberately
-    // deterministic, but it is now dense enough to visibly react to song changes.
+    // Structured phrase generation. The template distribution is not arbitrary:
+    // it is loaded from learned-profile-v1.json, currently produced from
+    // Absolute Zero 2 + Sakura 2 aligned exports.
     std::size_t phraseIndex = 0;
 
     for (std::size_t start = 4; start + 3 < beats.size(); start += 4, ++phraseIndex) {
-        std::array<std::size_t, 4> ranked = {
-            start,
-            start + 1,
-            start + 2,
-            start + 3,
-        };
-
-        std::sort(
-            ranked.begin(),
-            ranked.end(),
-            [&](std::size_t left, std::size_t right) {
-                return beatScore(beats[left]) > beatScore(beats[right]);
-            }
-        );
+        float x0 = positionForBeat(beats[start]).x;
+        float x1 = positionForBeat(beats[start + 1]).x;
+        float x2 = positionForBeat(beats[start + 2]).x;
+        float x3 = positionForBeat(beats[start + 3]).x;
 
         double phraseEnergy = 0.0;
+        double phraseOnset = 0.0;
+
         for (std::size_t index = start; index < start + 4; ++index) {
             phraseEnergy += beats[index].energy;
+            phraseOnset += beats[index].onset;
         }
+
         phraseEnergy /= 4.0;
+        phraseOnset /= 4.0;
 
-        int eventCount = 1;
-        if (phraseEnergy >= 0.70) {
-            eventCount = 2;
-        } else if (phraseEnergy < 0.24 && phraseIndex % 2 == 1) {
-            eventCount = 0;
+        auto phraseTemplate = choosePhraseTemplate(
+            profile,
+            phraseIndex,
+            phraseEnergy,
+            phraseOnset
+        );
+
+        ++result.phraseCount;
+
+        // Cap complexity using the density learned from exported cube phrases.
+        int eventBudget = std::clamp(
+            phraseEnergy > 0.70
+                ? profile.recommendedMaxEvents
+                : profile.recommendedMaxEvents - 1,
+            2,
+            6
+        );
+
+        switch (phraseTemplate) {
+            case PhraseTemplate::HazardOrbPad: {
+                addCountedObject(
+                    editorLayer,
+                    35,
+                    {x0, kGroundPadY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                structuredBlocks += addBlockColumn(
+                    editorLayer,
+                    x1,
+                    1,
+                    createdObjects
+                );
+                structuredBlocks += addBlockColumn(
+                    editorLayer,
+                    x1 + 30.0f,
+                    2,
+                    createdObjects
+                );
+                structuredBlocks += addBlockColumn(
+                    editorLayer,
+                    x1 + 60.0f,
+                    2,
+                    createdObjects
+                );
+
+                addCountedObject(
+                    editorLayer,
+                    36,
+                    {x2, kGroundSurfaceY + 105.0f},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                addCountedObject(
+                    editorLayer,
+                    8,
+                    {x3, kGroundY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                if (eventBudget >= 4 && phraseEnergy > 0.62) {
+                    addCountedObject(
+                        editorLayer,
+                        141,
+                        {(x2 + x3) * 0.5f, kGroundSurfaceY + 75.0f},
+                        createdObjects,
+                        gameplayEvents
+                    );
+                }
+                break;
+            }
+
+            case PhraseTemplate::HazardPad: {
+                addCountedObject(
+                    editorLayer,
+                    35,
+                    {x0, kGroundPadY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                structuredBlocks += addLowPlatform(
+                    editorLayer,
+                    x2,
+                    3,
+                    createdObjects
+                );
+
+                addCountedObject(
+                    editorLayer,
+                    8,
+                    {x3, kGroundY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                if (eventBudget >= 3) {
+                    addCountedObject(
+                        editorLayer,
+                        8,
+                        {x3 + 30.0f, kGroundY},
+                        createdObjects,
+                        gameplayEvents
+                    );
+                }
+                break;
+            }
+
+            case PhraseTemplate::HazardOrb: {
+                addCountedObject(
+                    editorLayer,
+                    8,
+                    {x0, kGroundY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                structuredBlocks += addLowPlatform(
+                    editorLayer,
+                    x2,
+                    phraseEnergy > 0.58 ? 4 : 2,
+                    createdObjects
+                );
+
+                addCountedObject(
+                    editorLayer,
+                    36,
+                    {x2, kGroundSurfaceY + 90.0f},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                if (eventBudget >= 3) {
+                    addCountedObject(
+                        editorLayer,
+                        8,
+                        {x3, kGroundY},
+                        createdObjects,
+                        gameplayEvents
+                    );
+                }
+                break;
+            }
+
+            case PhraseTemplate::HazardOnly: {
+                addCountedObject(
+                    editorLayer,
+                    8,
+                    {x1, kGroundY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                if (eventBudget >= 3 || phraseEnergy > 0.52) {
+                    addCountedObject(
+                        editorLayer,
+                        8,
+                        {x1 + 30.0f, kGroundY},
+                        createdObjects,
+                        gameplayEvents
+                    );
+                }
+
+                if (phraseIndex % 2 == 0) {
+                    structuredBlocks += addLowPlatform(
+                        editorLayer,
+                        x3,
+                        2,
+                        createdObjects
+                    );
+                }
+                break;
+            }
+
+            case PhraseTemplate::PadOnly: {
+                addCountedObject(
+                    editorLayer,
+                    35,
+                    {x1, kGroundPadY},
+                    createdObjects,
+                    gameplayEvents
+                );
+
+                structuredBlocks += addLowPlatform(
+                    editorLayer,
+                    x3,
+                    3,
+                    createdObjects
+                );
+                break;
+            }
+
+            case PhraseTemplate::Quiet: {
+                // Quiet phrases deliberately breathe. A tiny safe platform gives
+                // the section a visible contour without forcing a click.
+                if (phraseIndex % 2 == 0) {
+                    structuredBlocks += addLowPlatform(
+                        editorLayer,
+                        (x1 + x2) * 0.5f,
+                        2,
+                        createdObjects
+                    );
+                }
+                break;
+            }
         }
 
-        for (int event = 0; event < eventCount; ++event) {
-            std::size_t beatIndex = ranked[static_cast<std::size_t>(event)];
-            float eventX = positionForBeat(beats[beatIndex]).x;
-            int pattern = static_cast<int>((phraseIndex + event) % 5);
+        // Busy phrases get one actual off-beat interaction near the strongest
+        // micro-onset between the middle beats. This is the first step away from
+        // "beat = object" toward subdivisions driving gameplay.
+        if (
+            phraseEnergy > 0.64
+            && profile.denseSubdivisionWeight > 0.65
+            && eventBudget >= 4
+        ) {
+            OnsetSample const* strongestMicro = nullptr;
 
-            if (pattern == 0 || pattern == 3) {
-                if (addGeneratedObject(editorLayer, 8, {eventX, kGroundY})) {
-                    ++createdObjects;
-                    ++gameplayEvents;
+            for (auto const& onset : usableOnsets) {
+                if (onset.time <= beats[start + 1].time || onset.time >= beats[start + 3].time) {
+                    continue;
                 }
-            } else if (pattern == 1) {
-                // Two-spike accent on a strong phrase, but only when the next
-                // tracked beat leaves enough horizontal room.
-                if (addGeneratedObject(editorLayer, 8, {eventX, kGroundY})) {
-                    ++createdObjects;
-                    ++gameplayEvents;
+                if (nearestBeatDistance(beats, onset.time) < 0.090) {
+                    continue;
                 }
+                if (!strongestMicro || onset.strength > strongestMicro->strength) {
+                    strongestMicro = &onset;
+                }
+            }
 
-                if (beatIndex + 1 < beats.size()) {
-                    float nextBeatX = positionForBeat(beats[beatIndex + 1]).x;
-                    if (nextBeatX - eventX >= 110.0f) {
-                        if (addGeneratedObject(editorLayer, 8, {eventX + 30.0f, kGroundY})) {
-                            ++createdObjects;
-                            ++gameplayEvents;
-                        }
-                    }
-                }
-            } else if (pattern == 2) {
-                // Pads have a much lower visual/hitbox anchor than spikes. A
-                // floor pad centered around y=92 rests on the same y=90 ground
-                // surface where a spike centered at y=105 has its base.
-                constexpr float padGroundY = kGroundY - 13.0f;
-                if (addGeneratedObject(editorLayer, 35, {eventX, padGroundY})) {
-                    ++createdObjects;
-                    ++gameplayEvents;
-                }
-            } else {
-                // Phrase accent orb. It sits above the main beat contour and is
-                // optional gameplay rather than a required survival input.
-                if (addGeneratedObject(editorLayer, 36, {eventX, kGroundY + 135.0f})) {
-                    ++createdObjects;
-                    ++gameplayEvents;
-                }
+            if (strongestMicro && strongestMicro->strength >= threshold) {
+                float microX = positionForAudioTime(strongestMicro->time).x;
+                addCountedObject(
+                    editorLayer,
+                    141,
+                    {microX, kGroundSurfaceY + 75.0f},
+                    createdObjects,
+                    gameplayEvents
+                );
             }
         }
     }
@@ -418,6 +815,7 @@ BaselineGenerationResult generateBaselineLayout(
     result.success = true;
     result.createdObjects = createdObjects;
     result.gameplayEvents = gameplayEvents;
+    result.structuredBlocks = structuredBlocks;
     result.usedBeats = beats.size();
     result.firstBeatTime = beats.front().time;
     result.lastBeatTime = beats.back().time;
