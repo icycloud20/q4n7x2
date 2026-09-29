@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from gd_ai_editor.audio import analyze_audio
+from gd_ai_editor.audio import analyze_audio, write_beat_preview
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -69,6 +69,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a readable summary after analysis",
     )
     analyze_parser.add_argument(
+        "--beat-preview",
+        type=Path,
+        help="Optional WAV path containing the song with clicks on detected beats",
+    )
+    analyze_parser.add_argument(
         "--sample-rate",
         type=int,
         default=22050,
@@ -96,6 +101,14 @@ def main() -> None:
         )
         _write_json(arguments.out, analysis.to_dict())
         print(f"Wrote {arguments.out}")
+
+        if arguments.beat_preview:
+            preview = write_beat_preview(
+                arguments.audio_file,
+                [beat.time for beat in analysis.beats],
+                arguments.beat_preview,
+            )
+            print(f"Wrote {preview}")
 
         if arguments.summary:
             _print_summary(analysis)
