@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import collections
-import itertools
 import math
-import statistics
-import typing
+from collections import Counter, defaultdict
+from itertools import pairwise
+from statistics import median
+from typing import Any
 
 
 _TEMPLATE_BY_CATEGORIES = {
@@ -18,7 +18,7 @@ _TEMPLATE_BY_CATEGORIES = {
 }
 
 
-def _normalize(counter: collections.Counter[str]) -> dict[str, float]:
+def _normalize(counter: Counter[str]) -> dict[str, float]:
     total = sum(counter.values())
     if total <= 0:
         return {}
@@ -29,12 +29,12 @@ def _normalize(counter: collections.Counter[str]) -> dict[str, float]:
     }
 
 
-def _cube_interaction_objects(level: dict[str, typing.Any]) -> list[dict[str, typing.Any]]:
+def _cube_interaction_objects(level: dict[str, Any]) -> list[dict[str, Any]]:
     objects = level.get("objects")
     if not isinstance(objects, list):
         raise TypeError("Aligned gameplay export is missing an objects array")
 
-    result: list[dict[str, typing.Any]] = []
+    result: list[dict[str, Any]] = []
     for item in objects:
         if not isinstance(item, dict):
             continue
@@ -55,15 +55,15 @@ def _cube_interaction_objects(level: dict[str, typing.Any]) -> list[dict[str, ty
     return result
 
 
-def build_motif_profile(levels: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+def build_motif_profile(levels: list[dict[str, Any]]) -> dict[str, Any]:
     source_levels: list[str] = []
     source_object_count = 0
     cube_object_count = 0
 
-    template_counts: collections.Counter[str] = collections.Counter()
-    interaction_counts: collections.Counter[str] = collections.Counter()
-    beat_phase_counts: collections.Counter[str] = collections.Counter()
-    rhythm_gap_counts: collections.Counter[str] = collections.Counter()
+    template_counts: Counter[str] = Counter()
+    interaction_counts: Counter[str] = Counter()
+    beat_phase_counts: Counter[str] = Counter()
+    rhythm_gap_counts: Counter[str] = Counter()
     phrase_cluster_counts: list[int] = []
 
     for level in levels:
@@ -80,8 +80,8 @@ def build_motif_profile(levels: list[dict[str, typing.Any]]) -> dict[str, typing
         interactions = _cube_interaction_objects(level)
         cube_object_count += len(interactions)
 
-        phrases: dict[int, list[dict[str, typing.Any]]] = collections.defaultdict(list)
-        clusters: dict[float, list[dict[str, typing.Any]]] = collections.defaultdict(list)
+        phrases: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        clusters: dict[float, list[dict[str, Any]]] = defaultdict(list)
 
         for item in interactions:
             category = str(item.get("category"))
@@ -115,12 +115,12 @@ def build_motif_profile(levels: list[dict[str, typing.Any]]) -> dict[str, typing
 
         cluster_beats = sorted(clusters)
         if cluster_beats:
-            phrase_cluster_map: dict[int, int] = collections.Counter(
+            phrase_cluster_map: dict[int, int] = Counter(
                 math.floor(beat / 4.0) for beat in cluster_beats
             )
             phrase_cluster_counts.extend(phrase_cluster_map.values())
 
-        for left, right in itertools.pairwise(cluster_beats):
+        for left, right in pairwise(cluster_beats):
             gap = right - left
             if gap <= 0.0 or gap > 1.0:
                 continue
@@ -132,7 +132,7 @@ def build_motif_profile(levels: list[dict[str, typing.Any]]) -> dict[str, typing
         raise ValueError("At least one aligned gameplay export is required")
 
     phrase_count = sum(template_counts.values())
-    median_clusters = statistics.median(phrase_cluster_counts) if phrase_cluster_counts else 0.0
+    median_clusters = median(phrase_cluster_counts) if phrase_cluster_counts else 0.0
 
     # The raw editor exports contain stacked hitboxes and off-path hazards, so
     # the generator intentionally does not copy their raw density 1:1. This
