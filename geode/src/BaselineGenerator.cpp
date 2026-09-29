@@ -19,10 +19,6 @@ struct BeatSample {
     double energy = 0.0;
 };
 
-float snapGridX(float x) {
-    return std::round((x - 15.0f) / 30.0f) * 30.0f + 15.0f;
-}
-
 bool addGeneratedObject(
     LevelEditorLayer* editorLayer,
     int objectID,
