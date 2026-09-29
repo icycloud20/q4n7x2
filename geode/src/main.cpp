@@ -424,20 +424,30 @@ class $modify(GDAIEditorUI, EditorUI) {
         }
 
         showNotification(
-            fmt::format("Generated {} beat-synced objects.", generation.createdObjects),
+            fmt::format(
+                "Generated {} objects across {} beats.",
+                generation.createdObjects,
+                generation.usedBeats
+            ),
             NotificationIcon::Success,
             4.0f
         );
 
         FLAlertLayer::create(
-            "First Visible Generator",
+            "Generator Preview v2",
             fmt::format(
-                "Created <cg>{}</c> objects from <cy>{}</c> detected beats.<br><br>"
-                "This is the deterministic cube baseline: an orb marker on every beat plus "
-                "beat-selected spikes and jump pads on the normal GD ground. It is intentionally simple so we can verify "
-                "song-to-editor placement before replacing the rules with the trained model.",
+                "Created <cg>{}</c> objects across <cy>{}</c> main beats.<br>"
+                "Also surfaced <cp>{}</c> strong off-beat onsets and placed "
+                "<co>{}</c> gameplay events.<br><br>"
+                "<cy>Yellow orbs</c> = tracked beats<br>"
+                "<cp>Pink orbs</c> = strong micro-onsets<br>"
+                "Spikes/pads = energy-aware gameplay accents<br><br>"
+                "Hold/sustain detection is still a separate milestone; this patch is focused "
+                "on making beat density, micro-bumps, and gameplay response visibly testable.",
                 generation.createdObjects,
-                generation.usedBeats
+                generation.usedBeats,
+                generation.usedMicroOnsets,
+                generation.gameplayEvents
             ),
             "OK"
         )->show();
