@@ -480,7 +480,9 @@ StructuralMotif const* chooseStructuralMotif(
     double targetIntensity,
     float anchorY,
     bool inverted,
-    bool mini
+    bool mini,
+    StructuralMotif const* previous,
+    StructuralMotif const* twoBack
 ) {
     StructuralMotif const* best = nullptr;
     double bestScore = std::numeric_limits<double>::infinity();
@@ -512,10 +514,19 @@ StructuralMotif const* chooseStructuralMotif(
             1.0
         ) * 0.16;
 
+        double repeatPenalty = 0.0;
+        if (&motif == previous) {
+            repeatPenalty += 3.0;
+        }
+        if (&motif == twoBack) {
+            repeatPenalty += 1.25;
+        }
+
         double score =
             std::abs(motif.intensity - targetIntensity)
             + heightShiftPenalty
-            + deterministicJitter;
+            + deterministicJitter
+            + repeatPenalty;
 
         if (score < bestScore) {
             bestScore = score;
@@ -738,71 +749,8 @@ BaselineGenerationResult generateBaselineLayout(
     std::size_t gameplayEvents = 0;
     std::size_t structuredBlocks = 0;
 
-    // Debug beat lane. Keeping it for now makes timing regressions obvious while
-    // the actual gameplay below is generated in 4-beat phrases.
-    constexpr std::array<float, 4> beatMarkerY = {
-        kGroundY + 150.0f,
-        kGroundY + 165.0f,
-        kGroundY + 180.0f,
-        kGroundY + 165.0f,
-    };
-
-    for (std::size_t index = 0; index < beats.size(); ++index) {
-        float beatX = positionForBeat(beats[index]).x;
-        float markerY = beatMarkerY[index % beatMarkerY.size()];
-
-        if (addGeneratedObject(editorLayer, 36, {beatX, markerY})) {
-            ++createdObjects;
-        }
-    }
-
-    std::vector<OnsetSample> usableOnsets;
-    for (auto const& onset : analysis.onsets) {
-        if (onset.time < beats.front().time || onset.time > beats.back().time) {
-            continue;
-        }
-        usableOnsets.push_back(onset);
-    }
-
-    double threshold = onsetThreshold(usableOnsets);
-    double previousMicroTime = -1000.0;
-    std::size_t microIndex = 0;
-
-    // Strong off-beat transient lane. Human-level exports showed interaction
-    // clusters frequently separated by 1/16 and 1/8 beat, so the learned profile
-    // lets the preview retain dense micro-onsets instead of forcing everything
-    // onto quarter beats.
-    double minimumMicroSpacing =
-        profile.denseSubdivisionWeight >= 0.70 ? 0.060 : 0.085;
-
-    for (auto const& onset : usableOnsets) {
-        if (onset.strength < threshold) {
-            continue;
-        }
-
-        if (nearestBeatDistance(beats, onset.time) < 0.090) {
-            continue;
-        }
-
-        if (onset.time - previousMicroTime < minimumMicroSpacing) {
-            continue;
-        }
-
-        float onsetX = positionForAudioTime(onset.time).x;
-        float onsetY = kGroundY + 225.0f + static_cast<float>((microIndex % 3) * 12);
-
-        if (addGeneratedObject(editorLayer, 141, {onsetX, onsetY})) {
-            ++createdObjects;
-            ++result.usedMicroOnsets;
-            ++microIndex;
-            previousMicroTime = onset.time;
-        }
-
-        if (result.usedMicroOnsets >= 128) {
-            break;
-        }
-    }
-
+    // Debug beat / micro-onset object lanes were removed. They were useful
+    // while validating timing, but they interfered with actual playtesting.
 
     // Structural motif generation v2. Rather than asking a four-beat phrase for
     // a bag of object categories, this adapts complete eight-beat relative
@@ -815,6 +763,80 @@ BaselineGenerationResult generateBaselineLayout(
     bool currentInverted = false;
     bool currentMini = editorLayer->m_levelSettings->m_startMini;
     std::size_t generatedMotifs = 0;
+    StructuralMotif const* previousMotif = nullptr;
+    StructuralMotif const* twoBackMotif = nullptr;
+
+    struct PlacedStructure {
+        CCPoint position;
+        MotifKind kind;
+    };
+    std::vector<PlacedStructure> placedStructures;
+
+    auto snappedStructurePosition = [](CCPoint position) {
+        position.x = std::round(position.x / 15.0f) * 15.0f;
+        position.y = std::round(position.y / 15.0f) * 15.0f;
+        return position;
+    };
+
+    auto structureConflicts = [&](CCPoint const& position, MotifKind kind) {
+        for (auto const& placed : placedStructures) {
+            float dx = std::abs(position.x - placed.position.x);
+            float dy = std::abs(position.y - placed.position.y);
+
+            // Block centers closer than one grid cell overlap. Slopes get a
+            // little more breathing room because their collision spans wider.
+            float xLimit =
+                (kind == MotifKind::Slope || placed.kind == MotifKind::Slope)
+                    ? 34.0f
+                    : 29.0f;
+            float yLimit =
+                (kind == MotifKind::Slope || placed.kind == MotifKind::Slope)
+                    ? 24.0f
+                    : 29.0f;
+
+            if (dx < xLimit && dy < yLimit) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto addCleanStructure = [&](
+        int objectID,
+        MotifKind kind,
+        CCPoint position,
+        float rotation
+    ) {
+        position = snappedStructurePosition(position);
+
+        if (structureConflicts(position, kind)) {
+            return false;
+        }
+
+        if (!addGeneratedObjectWithRotation(
+            editorLayer,
+            objectID,
+            position,
+            rotation
+        )) {
+            return false;
+        }
+
+        placedStructures.push_back({position, kind});
+        ++createdObjects;
+        ++structuredBlocks;
+        return true;
+    };
+
+    auto addCleanBridge = [&](float startX, float endX, float y) {
+        std::size_t added = 0;
+        for (float x = startX; x <= endX + 1.0f && added < 18; x += 30.0f) {
+            if (addCleanStructure(1, MotifKind::Solid, {x, y}, 0.0f)) {
+                ++added;
+            }
+        }
+        return added;
+    };
 
     auto positionForBeatOffset = [&](std::size_t startIndex, double beatOffset) {
         beatOffset = std::clamp(beatOffset, 0.0, 8.0);
@@ -861,7 +883,9 @@ BaselineGenerationResult generateBaselineLayout(
                 targetIntensity,
                 pathAnchorY,
                 currentInverted,
-                currentMini
+                currentMini,
+                previousMotif,
+                twoBackMotif
             );
 
             if (!motif) {
@@ -869,13 +893,7 @@ BaselineGenerationResult generateBaselineLayout(
                 // connector instead of inventing a random object combination.
                 float x0 = positionForBeat(beats[start]).x;
                 float x2 = positionForBeat(beats[start + 2]).x;
-                structuredBlocks += addHorizontalBridge(
-                    editorLayer,
-                    x0,
-                    x2,
-                    pathAnchorY,
-                    createdObjects
-                );
+                addCleanBridge(x0, x2, pathAnchorY);
                 continue;
             }
 
@@ -889,37 +907,52 @@ BaselineGenerationResult generateBaselineLayout(
             }
 
             double firstStructureBeat = 8.0;
+            // Place support blocks first, then slopes. This gives solid geometry
+            // priority and rejects slopes that would cut through the blocks.
             for (auto const& event : motif->events) {
-                if (
-                    event.kind == MotifKind::Solid
-                    || event.kind == MotifKind::Slope
-                    || event.kind == MotifKind::Pad
-                ) {
-                    firstStructureBeat = std::min(
-                        firstStructureBeat,
-                        event.beatOffset
+                if (event.kind != MotifKind::Solid) {
+                    continue;
+                }
+
+                auto position = positionForBeatOffset(start, event.beatOffset);
+                position.y = motifAnchorY + event.relativeY;
+
+                if (std::isfinite(position.x) && std::isfinite(position.y)) {
+                    addCleanStructure(
+                        event.objectID,
+                        event.kind,
+                        position,
+                        event.rotation
                     );
                 }
             }
 
-            if (
-                !currentInverted
-                && std::abs(motifAnchorY - pathAnchorY) < 45.0f
-                && firstStructureBeat > 0.25
-            ) {
-                float bridgeStart = positionForBeat(beats[start]).x - 30.0f;
-                float bridgeEnd =
-                    positionForBeatOffset(start, firstStructureBeat).x - 30.0f;
-                structuredBlocks += addHorizontalBridge(
-                    editorLayer,
-                    bridgeStart,
-                    bridgeEnd,
-                    pathAnchorY,
-                    createdObjects
-                );
+            for (auto const& event : motif->events) {
+                if (event.kind != MotifKind::Slope) {
+                    continue;
+                }
+
+                auto position = positionForBeatOffset(start, event.beatOffset);
+                position.y = motifAnchorY + event.relativeY;
+
+                if (std::isfinite(position.x) && std::isfinite(position.y)) {
+                    addCleanStructure(
+                        event.objectID,
+                        event.kind,
+                        position,
+                        event.rotation
+                    );
+                }
             }
 
             for (auto const& event : motif->events) {
+                if (
+                    event.kind == MotifKind::Solid
+                    || event.kind == MotifKind::Slope
+                ) {
+                    continue;
+                }
+
                 auto position = positionForBeatOffset(start, event.beatOffset);
                 position.y = motifAnchorY + event.relativeY;
 
@@ -939,16 +972,11 @@ BaselineGenerationResult generateBaselineLayout(
                 }
 
                 ++createdObjects;
-
-                if (
-                    event.kind == MotifKind::Solid
-                    || event.kind == MotifKind::Slope
-                ) {
-                    ++structuredBlocks;
-                } else {
-                    ++gameplayEvents;
-                }
+                ++gameplayEvents;
             }
+
+            twoBackMotif = previousMotif;
+            previousMotif = motif;
 
             pathAnchorY = std::clamp(
                 motifAnchorY + motif->exitDeltaY,
@@ -966,13 +994,7 @@ BaselineGenerationResult generateBaselineLayout(
             float x0 = positionForBeat(beats[start]).x;
             float x2 = positionForBeat(beats[start + 2]).x;
 
-            structuredBlocks += addHorizontalBridge(
-                editorLayer,
-                x0 - 30.0f,
-                x2,
-                kGroundY,
-                createdObjects
-            );
+            addCleanBridge(x0 - 30.0f, x2, kGroundY);
 
             if (addCountedObject(
                 editorLayer,
