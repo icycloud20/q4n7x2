@@ -984,9 +984,24 @@ BaselineGenerationResult generateBaselineLayout(
 
             float motifAnchorY = pathAnchorY;
 
-            // The learned motif now supplies intent, not literal geometry.
-            // First solve a conservative landing path with 30-unit vertical
-            // steps, then place a small number of learned actions around it.
+            // Path-first v3.1: learn the *kind* of gameplay from the motif,
+            // then build a fresh, conservative cube path around real landings.
+            // Raw source coordinates and gravity-changing interactions are not
+            // copied because they only make sense inside their original level.
+            int learnedHazards = 0;
+            int learnedOrbs = 0;
+            int learnedPads = 0;
+
+            for (auto const& event : motif->events) {
+                if (event.kind == MotifKind::Hazard) {
+                    ++learnedHazards;
+                } else if (event.kind == MotifKind::Orb) {
+                    ++learnedOrbs;
+                } else if (event.kind == MotifKind::Pad) {
+                    ++learnedPads;
+                }
+            }
+
             float requestedDeltaY = std::clamp(
                 motif->exitDeltaY,
                 -120.0f,
@@ -994,25 +1009,23 @@ BaselineGenerationResult generateBaselineLayout(
             );
             float snappedDeltaY =
                 std::round(requestedDeltaY / 30.0f) * 30.0f;
+
+            // Do not repeatedly ask for downward movement while already on the
+            // floor. Turn that intent into a small climb so the layout develops
+            // actual shape instead of becoming one endless flat trampoline row.
+            if (motifAnchorY <= kGroundY + 1.0f && snappedDeltaY < 0.0f) {
+                snappedDeltaY = targetIntensity > 0.68 ? 60.0f : 30.0f;
+            }
+
+            if (motifAnchorY >= 690.0f && snappedDeltaY > 0.0f) {
+                snappedDeltaY = -std::max(30.0f, snappedDeltaY);
+            }
+
             float targetY = std::clamp(
                 motifAnchorY + snappedDeltaY,
                 kGroundY,
-                825.0f
+                720.0f
             );
-
-            auto pathYForProgress = [&](double progress) {
-                progress = std::clamp(progress, 0.0, 1.0);
-                float rawY =
-                    motifAnchorY
-                    + (targetY - motifAnchorY) * static_cast<float>(progress);
-                float relative =
-                    std::round((rawY - motifAnchorY) / 30.0f) * 30.0f;
-                return std::clamp(
-                    motifAnchorY + relative,
-                    kGroundY,
-                    825.0f
-                );
-            };
 
             float chunkStartX = positionForBeatOffset(start, 0.0).x;
             float chunkEndX = positionForBeatOffset(start, 8.0).x;
@@ -1028,7 +1041,7 @@ BaselineGenerationResult generateBaselineLayout(
 
             int horizontalSegments = std::max(
                 4,
-                static_cast<int>(std::ceil(chunkWidth / 150.0f))
+                static_cast<int>(std::ceil(chunkWidth / 175.0f))
             );
             int verticalSegments = static_cast<int>(
                 std::ceil(std::abs(targetY - motifAnchorY) / 30.0f)
@@ -1036,12 +1049,22 @@ BaselineGenerationResult generateBaselineLayout(
             int pathSegments = std::clamp(
                 std::max(horizontalSegments, verticalSegments),
                 4,
-                12
+                10
             );
 
-            // Build small landing islands. They are intentionally sparse enough
-            // to remain gameplay instead of becoming a giant solid rectangle,
-            // but close enough that ordinary cube jumps can connect them.
+            struct PlannedLanding {
+                float x = 0.0f;
+                float y = kGroundY;
+                int width = 3;
+            };
+
+            std::vector<PlannedLanding> landings;
+            landings.reserve(static_cast<std::size_t>(pathSegments + 1));
+
+            float previousY = motifAnchorY;
+            float bumpAmplitude = targetIntensity > 0.72 ? 60.0f : 30.0f;
+            float bumpDirection = motifAnchorY > 540.0f ? -1.0f : 1.0f;
+
             for (int segment = 0; segment <= pathSegments; ++segment) {
                 double progress =
                     static_cast<double>(segment)
@@ -1049,87 +1072,140 @@ BaselineGenerationResult generateBaselineLayout(
                 float x =
                     chunkStartX
                     + chunkWidth * static_cast<float>(progress);
-                float y = pathYForProgress(progress);
-                int width =
-                    (segment == 0 || segment == pathSegments) ? 3 : 2;
-                addLandingPlatform(x, y, width);
+
+                float linearY =
+                    motifAnchorY
+                    + (targetY - motifAnchorY) * static_cast<float>(progress);
+                float arcY =
+                    std::sin(static_cast<float>(progress) * 3.14159265f)
+                    * bumpAmplitude
+                    * bumpDirection;
+                float candidateY =
+                    std::round((linearY + arcY) / 30.0f) * 30.0f;
+
+                if (segment == 0) {
+                    candidateY = motifAnchorY;
+                } else if (segment == pathSegments) {
+                    candidateY = targetY;
+                } else {
+                    candidateY = std::clamp(
+                        candidateY,
+                        previousY - 30.0f,
+                        previousY + 30.0f
+                    );
+
+                    int remaining = pathSegments - segment;
+                    float minimumReachable =
+                        targetY - static_cast<float>(remaining) * 30.0f;
+                    float maximumReachable =
+                        targetY + static_cast<float>(remaining) * 30.0f;
+                    candidateY = std::clamp(
+                        candidateY,
+                        minimumReachable,
+                        maximumReachable
+                    );
+                }
+
+                candidateY = std::clamp(candidateY, kGroundY, 720.0f);
+
+                int width = 3;
+                if (segment == 0 || segment == pathSegments) {
+                    width = 4;
+                } else if ((segment + static_cast<int>(generatedMotifs)) % 3 == 0) {
+                    width = 4;
+                }
+
+                landings.push_back({x, candidateY, width});
+                previousY = candidateY;
             }
 
-            // Pull only the interaction intent from the learned structure.
-            // Literal learned solids/slopes are intentionally not copied here:
-            // their source spacing is song-specific and was the main cause of
-            // overlap, broken slopes and impossible vertical offsets.
-            int maximumActions = std::clamp(
-                profile.recommendedMaxEvents,
-                2,
-                4
+            // Use one learned orb/pad idea at most per chunk. Their *positions*
+            // are designed here around the solved path rather than copied from
+            // the source song.
+            int orbTransition = -1;
+            if (learnedOrbs > 0 && pathSegments >= 4) {
+                orbTransition = std::clamp(pathSegments / 2, 1, pathSegments - 2);
+            }
+
+            int padTransition = -1;
+            if (learnedPads > 0 && pathSegments >= 3) {
+                int preferred =
+                    generatedMotifs % 2 == 0 ? 1 : pathSegments - 2;
+
+                if (preferred == orbTransition) {
+                    preferred =
+                        preferred == 1
+                            ? std::min(2, pathSegments - 1)
+                            : std::max(0, pathSegments - 3);
+                }
+
+                if (preferred != orbTransition) {
+                    padTransition = preferred;
+                }
+            }
+
+            if (orbTransition >= 0) {
+                // Give the orb transition a real gap and a generous landing.
+                landings[static_cast<std::size_t>(orbTransition)].width = 2;
+                landings[static_cast<std::size_t>(orbTransition + 1)].width = 4;
+            }
+
+            for (auto const& landing : landings) {
+                addLandingPlatform(landing.x, landing.y, landing.width);
+            }
+
+            int hazardBudget = std::clamp(
+                learnedHazards + (targetIntensity > 0.62 ? 1 : 0),
+                1,
+                3
             );
-            int placedChunkActions = 0;
-            double previousActionBeat = -10.0;
+            int hazardsPlaced = 0;
 
-            for (auto const& event : motif->events) {
+            for (int transition = 0; transition < pathSegments; ++transition) {
+                auto const& current =
+                    landings[static_cast<std::size_t>(transition)];
+                auto const& next =
+                    landings[static_cast<std::size_t>(transition + 1)];
+
+                if (transition == orbTransition) {
+                    float orbX = current.x + (next.x - current.x) * 0.48f;
+                    float orbY = std::max(current.y, next.y) + 60.0f;
+
+                    // Normalize every learned orb to a normal yellow jump orb.
+                    // Blue/green/spider/etc. effects require their own physics
+                    // solver and are rejected from this cube-only path pass.
+                    addCleanAction(36, {orbX, orbY}, 0.0f);
+                    continue;
+                }
+
+                if (transition == padTransition) {
+                    int padObjectID =
+                        next.y > current.y + 1.0f ? 35 : 140;
+                    float padX = current.x + 15.0f;
+                    float padY = current.y - 13.0f;
+
+                    // Yellow or pink only: both preserve normal gravity.
+                    addCleanAction(padObjectID, {padX, padY}, 0.0f);
+                    continue;
+                }
+
                 if (
-                    event.kind != MotifKind::Orb
-                    && event.kind != MotifKind::Pad
+                    hazardsPlaced < hazardBudget
+                    && current.width >= 3
+                    && (
+                        transition % 2 == 0
+                        || targetIntensity > 0.72
+                    )
                 ) {
-                    continue;
-                }
+                    float spikeX =
+                        current.x
+                        + (current.width >= 4 ? 30.0f : 15.0f);
 
-                if (placedChunkActions >= maximumActions) {
-                    break;
-                }
-
-                if (
-                    event.beatOffset < 0.5
-                    || event.beatOffset > 7.5
-                    || event.beatOffset - previousActionBeat < 0.85
-                ) {
-                    continue;
-                }
-
-                // Ceiling-facing pads are not useful for a normal-gravity
-                // path. They can return once inverted path solving is enabled.
-                if (
-                    event.kind == MotifKind::Pad
-                    && std::abs(event.rotation) > 90.0f
-                ) {
-                    continue;
-                }
-
-                auto position =
-                    positionForBeatOffset(start, event.beatOffset);
-                double progress =
-                    std::clamp(event.beatOffset / 8.0, 0.0, 1.0);
-                float pathY = pathYForProgress(progress);
-
-                if (event.kind == MotifKind::Pad) {
-                    addLandingPlatform(position.x, pathY, 2);
-                    position.y = pathY + 15.0f;
-                } else {
-                    float learnedPathY =
-                        motif->exitDeltaY
-                        * static_cast<float>(progress);
-                    float localOffset =
-                        event.relativeY - learnedPathY;
-                    float orbHeight = std::clamp(
-                        60.0f + std::abs(localOffset) * 0.20f,
-                        60.0f,
-                        105.0f
-                    );
-                    position.y = pathY + orbHeight;
-                }
-
-                if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
-                    continue;
-                }
-
-                if (addCleanAction(
-                    event.objectID,
-                    position,
-                    event.kind == MotifKind::Pad ? 0.0f : event.rotation
-                )) {
-                    previousActionBeat = event.beatOffset;
-                    ++placedChunkActions;
+                    // Small spike: enough to demand a jump without turning each
+                    // island into a blind or frame-perfect landing.
+                    if (addCleanAction(8, {spikeX, current.y}, 0.0f)) {
+                        ++hazardsPlaced;
+                    }
                 }
             }
 
