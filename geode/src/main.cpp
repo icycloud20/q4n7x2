@@ -329,9 +329,10 @@ class $modify(GDAIEditorUI, EditorUI) {
         auto songDirectory = Mod::get()->getSaveDir() / "song-cache" / makeSongKey(level);
         auto signature = makeFileSignature(audioPath);
 
-        auto analysisPath = songDirectory / ("analysis-" + signature + ".json");
-        auto previewPath = songDirectory / ("beats-" + signature + ".wav");
-        auto logPath = songDirectory / ("analysis-" + signature + ".log");
+        constexpr auto cacheVersion = "v2";
+        auto analysisPath = songDirectory / ("analysis-" + std::string(cacheVersion) + "-" + signature + ".json");
+        auto previewPath = songDirectory / ("beats-" + std::string(cacheVersion) + "-" + signature + ".wav");
+        auto logPath = songDirectory / ("analysis-" + std::string(cacheVersion) + "-" + signature + ".log");
 
         if (std::filesystem::exists(analysisPath)) {
             finishEarly();
