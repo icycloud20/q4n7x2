@@ -107,6 +107,7 @@ def main() -> None:
                 arguments.audio_file,
                 [beat.time for beat in analysis.beats],
                 arguments.beat_preview,
+                beat_strengths=[beat.onset_strength for beat in analysis.beats],
             )
             print(f"Wrote {preview}")
 
