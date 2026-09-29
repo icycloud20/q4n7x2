@@ -247,6 +247,12 @@ GameplayExportResult exportGameplayTimeline(
     levelJson["audio_track"] = level->m_audioTrack;
     levelJson["song_offset_seconds"] = settings ? settings->m_songOffset : 0.0f;
     levelJson["platformer"] = settings ? settings->m_platformerMode : false;
+    levelJson["start_mode"] = settings ? settings->m_startMode : 0;
+    levelJson["start_speed"] = settings ? static_cast<int>(settings->m_startSpeed) : 0;
+    levelJson["start_mini"] = settings ? settings->m_startMini : false;
+    levelJson["start_dual"] = settings ? settings->m_startDual : false;
+    levelJson["start_mirror"] = settings ? settings->m_mirrorMode : false;
+    levelJson["reverse_gameplay"] = settings ? settings->m_reverseGameplay : false;
     root["level"] = levelJson;
 
     auto summary = matjson::Value::object();
