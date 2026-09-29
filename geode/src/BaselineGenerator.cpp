@@ -6,17 +6,32 @@
 #include <Geode/binding/LevelSettingsObject.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <vector>
 
 using namespace geode::prelude;
 
 namespace {
+constexpr float kGroundY = 105.0f;
+constexpr std::size_t kMaximumPreviewBeats = 96;
+
 struct BeatSample {
     double time = 0.0;
     double onset = 0.0;
     double energy = 0.0;
+};
+
+struct OnsetSample {
+    double time = 0.0;
+    double strength = 0.0;
+};
+
+struct AnalysisData {
+    std::vector<BeatSample> beats;
+    std::vector<OnsetSample> onsets;
 };
 
 bool addGeneratedObject(
@@ -31,7 +46,7 @@ bool addGeneratedObject(
     return editorLayer->createObject(objectID, position, true) != nullptr;
 }
 
-std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std::string& error) {
+AnalysisData readAnalysis(std::filesystem::path const& analysisPath, std::string& error) {
     std::ifstream input(analysisPath);
     if (!input) {
         error = "Could not open the cached song analysis.";
@@ -51,7 +66,7 @@ std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std
         return {};
     }
 
-    std::vector<BeatSample> beats;
+    AnalysisData analysis;
 
     for (auto const& value : beatsResult.unwrap()) {
         auto timeResult = value["time"].asDouble();
@@ -63,18 +78,96 @@ std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std
         beat.time = timeResult.unwrap();
         beat.onset = value["onset_strength"].asDouble().unwrapOr(0.0);
         beat.energy = value["energy"].asDouble().unwrapOr(0.0);
-        beats.push_back(beat);
+        analysis.beats.push_back(beat);
+    }
+
+    auto onsetsResult = root["onsets"].asArray();
+    if (onsetsResult.isOk()) {
+        for (auto const& value : onsetsResult.unwrap()) {
+            auto timeResult = value["time"].asDouble();
+            if (!timeResult.isOk()) {
+                continue;
+            }
+
+            OnsetSample onset;
+            onset.time = timeResult.unwrap();
+            onset.strength = value["strength"].asDouble().unwrapOr(0.0);
+            analysis.onsets.push_back(onset);
+        }
     }
 
     std::sort(
-        beats.begin(),
-        beats.end(),
+        analysis.beats.begin(),
+        analysis.beats.end(),
         [](BeatSample const& left, BeatSample const& right) {
             return left.time < right.time;
         }
     );
 
-    return beats;
+    std::sort(
+        analysis.onsets.begin(),
+        analysis.onsets.end(),
+        [](OnsetSample const& left, OnsetSample const& right) {
+            return left.time < right.time;
+        }
+    );
+
+    return analysis;
+}
+
+double beatScore(BeatSample const& beat) {
+    return beat.onset * 0.72 + beat.energy * 0.28;
+}
+
+double nearestBeatDistance(std::vector<BeatSample> const& beats, double time) {
+    if (beats.empty()) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    auto right = std::lower_bound(
+        beats.begin(),
+        beats.end(),
+        time,
+        [](BeatSample const& beat, double value) {
+            return beat.time < value;
+        }
+    );
+
+    double distance = std::numeric_limits<double>::infinity();
+
+    if (right != beats.end()) {
+        distance = std::min(distance, std::abs(right->time - time));
+    }
+
+    if (right != beats.begin()) {
+        auto left = std::prev(right);
+        distance = std::min(distance, std::abs(left->time - time));
+    }
+
+    return distance;
+}
+
+double onsetThreshold(std::vector<OnsetSample> const& onsets) {
+    if (onsets.empty()) {
+        return 1.0;
+    }
+
+    std::vector<double> strengths;
+    strengths.reserve(onsets.size());
+
+    for (auto const& onset : onsets) {
+        strengths.push_back(onset.strength);
+    }
+
+    std::size_t percentileIndex = strengths.size() * 65 / 100;
+    percentileIndex = std::min(percentileIndex, strengths.size() - 1);
+    std::nth_element(
+        strengths.begin(),
+        strengths.begin() + static_cast<std::ptrdiff_t>(percentileIndex),
+        strengths.end()
+    );
+
+    return std::max(0.12, strengths[percentileIndex]);
 }
 }
 
@@ -90,12 +183,12 @@ BaselineGenerationResult generateBaselineLayout(
     }
 
     if (editorLayer->m_levelSettings->m_platformerMode) {
-        result.error = "The first generator preview currently supports classic mode only.";
+        result.error = "The generator preview currently supports classic mode only.";
         return result;
     }
 
     if (editorLayer->m_levelSettings->m_startMode != 0) {
-        result.error = "The first generator preview currently supports cube start mode only.";
+        result.error = "The generator preview currently supports cube start mode only.";
         return result;
     }
 
@@ -107,14 +200,14 @@ BaselineGenerationResult generateBaselineLayout(
     }
 
     std::string readError;
-    auto allBeats = readBeats(analysisPath, readError);
+    auto analysis = readAnalysis(analysisPath, readError);
 
     if (!readError.empty()) {
         result.error = readError;
         return result;
     }
 
-    if (allBeats.size() < 12) {
+    if (analysis.beats.size() < 12) {
         result.error = "Not enough detected beats to generate a preview.";
         return result;
     }
@@ -123,21 +216,25 @@ BaselineGenerationResult generateBaselineLayout(
     double minimumAudioTime = songOffset + 1.25;
 
     auto first = std::lower_bound(
-        allBeats.begin(),
-        allBeats.end(),
+        analysis.beats.begin(),
+        analysis.beats.end(),
         minimumAudioTime,
         [](BeatSample const& beat, double value) {
             return beat.time < value;
         }
     );
 
-    if (first == allBeats.end()) {
+    if (first == analysis.beats.end()) {
         result.error = "No detected beats occur after the current song offset.";
         return result;
     }
 
     std::vector<BeatSample> beats;
-    for (auto iterator = first; iterator != allBeats.end() && beats.size() < 64; ++iterator) {
+    for (
+        auto iterator = first;
+        iterator != analysis.beats.end() && beats.size() < kMaximumPreviewBeats;
+        ++iterator
+    ) {
         beats.push_back(*iterator);
     }
 
@@ -146,9 +243,13 @@ BaselineGenerationResult generateBaselineLayout(
         return result;
     }
 
-    auto positionForBeat = [&](BeatSample const& beat) {
-        float levelTime = static_cast<float>(std::max(0.0, beat.time - songOffset));
+    auto positionForAudioTime = [&](double audioTime) {
+        float levelTime = static_cast<float>(std::max(0.0, audioTime - songOffset));
         return editorLayer->m_drawGridLayer->posForTime(levelTime);
+    };
+
+    auto positionForBeat = [&](BeatSample const& beat) {
+        return positionForAudioTime(beat.time);
     };
 
     float firstX = positionForBeat(beats.front()).x;
@@ -160,62 +261,148 @@ BaselineGenerationResult generateBaselineLayout(
     }
 
     std::size_t createdObjects = 0;
+    std::size_t gameplayEvents = 0;
 
-    // The built-in Geometry Dash ground stays untouched. The first visible
-    // baseline only places gameplay events on top of it, so the generated
-    // section starts playable instead of forcing the cube into a block wall.
+    // The editor's visible gameplay baseline is 90 units above the raw y=15
+    // row used by some old level-string examples. The previous preview exposed
+    // this clearly by placing everything three grid blocks too low.
+    constexpr std::array<float, 4> beatMarkerY = {
+        kGroundY + 60.0f,
+        kGroundY + 75.0f,
+        kGroundY + 90.0f,
+        kGroundY + 75.0f,
+    };
 
-    // Put one harmless orb marker on every detected beat so sync is visually
-    // obvious during playtest. Obstacles are layered onto a subset of those beats.
+    // Yellow orb = main detected beat. This intentionally marks EVERY beat so
+    // timing drift is obvious instead of hidden behind a sparse obstacle pattern.
     for (std::size_t index = 0; index < beats.size(); ++index) {
         float beatX = positionForBeat(beats[index]).x;
-
-        // Alternate the marker height in a simple 4-beat contour so the beat grid
-        // is easy to see without turning the markers into required inputs.
-        constexpr float markerHeights[] = {75.0f, 90.0f, 105.0f, 90.0f};
-        float markerY = markerHeights[index % 4];
+        float markerY = beatMarkerY[index % beatMarkerY.size()];
 
         createdObjects += addGeneratedObject(editorLayer, 36, {beatX, markerY}) ? 1 : 0;
     }
 
-    // One gameplay event per four-beat phrase. The strongest detected beat in
-    // each phrase receives the obstacle so the preview follows musical accents
-    // while the per-beat orb markers make timing density obvious.
-    std::size_t phraseIndex = 0;
-    for (std::size_t start = 4; start + 3 < beats.size(); start += 4, ++phraseIndex) {
-        std::size_t strongest = start;
+    // Pink orb = strong onset that is NOT already represented by a main beat.
+    // This surfaces smaller kicks, snares, taps, and "micro-bumps" detected by
+    // librosa without pretending they are full beats.
+    std::vector<OnsetSample> usableOnsets;
+    for (auto const& onset : analysis.onsets) {
+        if (onset.time < beats.front().time || onset.time > beats.back().time) {
+            continue;
+        }
+        usableOnsets.push_back(onset);
+    }
 
-        for (std::size_t index = start + 1; index < start + 4; ++index) {
-            double currentScore = beats[index].onset * 0.70 + beats[index].energy * 0.30;
-            double strongestScore =
-                beats[strongest].onset * 0.70 + beats[strongest].energy * 0.30;
+    double threshold = onsetThreshold(usableOnsets);
+    double previousMicroTime = -1000.0;
+    std::size_t microIndex = 0;
 
-            if (currentScore > strongestScore) {
-                strongest = index;
-            }
+    for (auto const& onset : usableOnsets) {
+        if (onset.strength < threshold) {
+            continue;
         }
 
-        float obstacleX = positionForBeat(beats[strongest]).x;
+        // Do not draw a second marker when an onset is effectively the same hit
+        // as a tracked beat.
+        if (nearestBeatDistance(beats, onset.time) < 0.095) {
+            continue;
+        }
 
-        if (phraseIndex % 4 == 3) {
-            // Give some phrases a non-lethal automatic jump instead of another
-            // spike so the baseline is visibly more than a metronome of hazards.
-            createdObjects += addGeneratedObject(editorLayer, 35, {obstacleX, 15.0f}) ? 1 : 0;
-        } else {
-            // Standard ground spike. Every third phrase gets a second adjacent
-            // spike when there is enough room before the next detected beat.
-            createdObjects += addGeneratedObject(editorLayer, 8, {obstacleX, 15.0f}) ? 1 : 0;
+        // Prevent dense transient clusters from becoming an unreadable orb wall.
+        if (onset.time - previousMicroTime < 0.085) {
+            continue;
+        }
 
-            if (phraseIndex % 3 == 2 && strongest + 1 < beats.size()) {
-                float nextBeatX = positionForBeat(beats[strongest + 1]).x;
-                if (nextBeatX - obstacleX >= 105.0f) {
-                    createdObjects += addGeneratedObject(editorLayer, 8, {obstacleX + 30.0f, 15.0f}) ? 1 : 0;
+        float onsetX = positionForAudioTime(onset.time).x;
+        float onsetY = kGroundY + 120.0f + static_cast<float>((microIndex % 3) * 12);
+
+        if (addGeneratedObject(editorLayer, 141, {onsetX, onsetY})) {
+            ++createdObjects;
+            ++result.usedMicroOnsets;
+            ++microIndex;
+            previousMicroTime = onset.time;
+        }
+
+        if (result.usedMicroOnsets >= 96) {
+            break;
+        }
+    }
+
+    // Gameplay density follows local energy. Quiet phrases get a light event;
+    // energetic phrases get multiple hazards or pads. This is still deliberately
+    // deterministic, but it is now dense enough to visibly react to song changes.
+    std::size_t phraseIndex = 0;
+
+    for (std::size_t start = 4; start + 3 < beats.size(); start += 4, ++phraseIndex) {
+        std::array<std::size_t, 4> ranked = {
+            start,
+            start + 1,
+            start + 2,
+            start + 3,
+        };
+
+        std::sort(
+            ranked.begin(),
+            ranked.end(),
+            [&](std::size_t left, std::size_t right) {
+                return beatScore(beats[left]) > beatScore(beats[right]);
+            }
+        );
+
+        double phraseEnergy = 0.0;
+        for (std::size_t index = start; index < start + 4; ++index) {
+            phraseEnergy += beats[index].energy;
+        }
+        phraseEnergy /= 4.0;
+
+        int eventCount = 1;
+        if (phraseEnergy >= 0.70) {
+            eventCount = 2;
+        } else if (phraseEnergy < 0.24 && phraseIndex % 2 == 1) {
+            eventCount = 0;
+        }
+
+        for (int event = 0; event < eventCount; ++event) {
+            std::size_t beatIndex = ranked[static_cast<std::size_t>(event)];
+            float eventX = positionForBeat(beats[beatIndex]).x;
+            int pattern = static_cast<int>((phraseIndex + event) % 5);
+
+            if (pattern == 0 || pattern == 3) {
+                if (addGeneratedObject(editorLayer, 8, {eventX, kGroundY})) {
+                    ++createdObjects;
+                    ++gameplayEvents;
+                }
+            } else if (pattern == 1) {
+                // Two-spike accent on a strong phrase, but only when the next
+                // tracked beat leaves enough horizontal room.
+                if (addGeneratedObject(editorLayer, 8, {eventX, kGroundY})) {
+                    ++createdObjects;
+                    ++gameplayEvents;
+                }
+
+                if (beatIndex + 1 < beats.size()) {
+                    float nextBeatX = positionForBeat(beats[beatIndex + 1]).x;
+                    if (nextBeatX - eventX >= 110.0f) {
+                        if (addGeneratedObject(editorLayer, 8, {eventX + 30.0f, kGroundY})) {
+                            ++createdObjects;
+                            ++gameplayEvents;
+                        }
+                    }
+                }
+            } else if (pattern == 2) {
+                if (addGeneratedObject(editorLayer, 35, {eventX, kGroundY})) {
+                    ++createdObjects;
+                    ++gameplayEvents;
+                }
+            } else {
+                // Phrase accent orb. It sits above the main beat contour and is
+                // optional gameplay rather than a required survival input.
+                if (addGeneratedObject(editorLayer, 36, {eventX, kGroundY + 135.0f})) {
+                    ++createdObjects;
+                    ++gameplayEvents;
                 }
             }
         }
-
-        // The beat marker layer above already shows every beat, so phrase events
-        // stay focused on actual gameplay objects.
     }
 
     if (createdObjects == 0) {
@@ -225,6 +412,7 @@ BaselineGenerationResult generateBaselineLayout(
 
     result.success = true;
     result.createdObjects = createdObjects;
+    result.gameplayEvents = gameplayEvents;
     result.usedBeats = beats.size();
     result.firstBeatTime = beats.front().time;
     result.lastBeatTime = beats.back().time;
