@@ -16,7 +16,6 @@ struct BaselineGenerationResult {
 };
 
 BaselineGenerationResult generateBaselineLayout(
-    EditorUI* editorUI,
     LevelEditorLayer* editorLayer,
     std::filesystem::path const& analysisPath
 );
