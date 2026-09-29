@@ -1,6 +1,8 @@
 #include "GameplayExport.hpp"
 
 #include <Geode/Enums.hpp>
+#include <Geode/binding/DrawGridLayer.hpp>
+#include <Geode/binding/EffectGameObject.hpp>
 #include <Geode/binding/GameObject.hpp>
 #include <Geode/binding/GJGameLevel.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
@@ -152,6 +154,30 @@ bool shouldExport(GameObject* object) {
     return object->m_objectType != GameObjectType::Decoration;
 }
 
+float levelTimeForObject(LevelEditorLayer* editorLayer, GameObject* object) {
+    if (!editorLayer || !editorLayer->m_drawGridLayer || !object) {
+        return 0.0f;
+    }
+
+    int order = 0;
+    int channel = 0;
+
+    if (auto* effectObject = typeinfo_cast<EffectGameObject*>(object)) {
+        order = effectObject->m_ordValue;
+        channel = effectObject->m_channelValue;
+    }
+
+    return editorLayer->m_drawGridLayer->timeForPos(
+        object->getPosition(),
+        order,
+        channel,
+        false,
+        true,
+        false,
+        0
+    );
+}
+
 matjson::Value groupsForObject(GameObject* object) {
     auto groups = matjson::Value::array();
 
@@ -241,7 +267,7 @@ GameplayExportResult exportGameplayTimeline(
 
         float x = object->getPositionX();
         float y = object->getPositionY();
-        float levelTime = editorLayer->timeForXPos(x);
+        float levelTime = levelTimeForObject(editorLayer, object);
         float audioTime = levelTime + songOffset;
 
         auto objectJson = matjson::Value::object();
