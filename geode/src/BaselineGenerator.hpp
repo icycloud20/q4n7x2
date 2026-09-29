@@ -2,6 +2,7 @@
 
 #include <Geode/Geode.hpp>
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 
