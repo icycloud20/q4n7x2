@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "profile_type": "cube_phrase_prior",
+  "source_levels": [
+    "Absolute Zero   2",
+    "Sakura 2"
+  ],
+  "source_level_count": 2,
+  "source_object_count": 33670,
+  "cube_interaction_object_count": 3353,
+  "cube_phrase_count": 45,
+  "template_weights": {
+    "hazard_only": 0.155556,
+    "hazard_orb": 0.133333,
+    "hazard_orb_pad": 0.511111,
+    "hazard_pad": 0.155556,
+    "pad_only": 0.022222,
+    "quiet": 0.022222
+  },
+  "interaction_weights": {
+    "hazard": 0.895019,
+    "orb": 0.026245,
+    "pad": 0.029526,
+    "portal": 0.04921
+  },
+  "quarter_beat_phase_weights": {
+    "0.00": 0.235908,
+    "0.25": 0.255294,
+    "0.50": 0.245452,
+    "0.75": 0.263346
+  },
+  "rhythm_gap_sixteenth_weights": {
+    "1": 0.616927,
+    "10": 0.004454,
+    "11": 0.001114,
+    "13": 0.002227,
+    "15": 0.001114,
+    "16": 0.002227,
+    "2": 0.191537,
+    "3": 0.101336,
+    "4": 0.055679,
+    "5": 0.012249,
+    "6": 0.006682,
+    "7": 0.003341,
+    "9": 0.001114
+  },
+  "median_interaction_clusters_per_phrase": 18.0,
+  "recommended_max_events_per_phrase": 4,
+  "notes": [
+    "Profile is learned from aligned editor exports, not replay inputs.",
+    "Raw editor density is compressed before generation because exported levels include stacked/off-path collision objects.",
+    "Replay capture will be needed before the model can learn exact player inputs and required interaction paths."
+  ]
+}
