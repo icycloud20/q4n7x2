@@ -412,7 +412,7 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto generation = generateBaselineLayout(editorLayer, analysisPath);
+        auto generation = generateBaselineLayout(this, editorLayer, analysisPath);
 
         if (!generation.success) {
             FLAlertLayer::create(
@@ -435,8 +435,7 @@ class $modify(GDAIEditorUI, EditorUI) {
                 "Created <cg>{}</c> objects from <cy>{}</c> detected beats.<br><br>"
                 "This is the deterministic cube baseline: beat-selected spikes, jump pads, "
                 "and optional yellow orbs on the normal GD ground. It is intentionally simple so we can verify "
-                "song-to-editor placement before replacing the rules with the trained model.<br><br>"
-                "You can <cy>Undo</c> the whole generation in one step.",
+                "song-to-editor placement before replacing the rules with the trained model.",
                 generation.createdObjects,
                 generation.usedBeats
             ),
