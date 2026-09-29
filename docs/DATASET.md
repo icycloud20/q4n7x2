@@ -121,3 +121,32 @@ Before training the first model:
 4. identify which modifier object IDs actually affect gameplay,
 5. add player-state reconstruction (mode, gravity, size, speed) over the timeline,
 6. then generate cube-only training sequences.
+
+
+## Learned phrase profile
+
+Aligned exports can now be compressed into a reusable cube phrase prior:
+
+```text
+gd-ai gameplay profile level-a-aligned.json level-b-aligned.json --out learned-profile.json
+```
+
+The profile currently learns:
+
+- which interaction combinations occur together inside four-beat cube phrases,
+- relative frequencies of hazard / orb / pad / portal objects,
+- quarter-beat phase usage,
+- common interaction-cluster gaps quantized to 1/16-beat steps,
+- a compressed phrase-density prior.
+
+The bundled `learned-profile-v1.json` was produced from the current Absolute Zero 2 and Sakura 2 exports.
+It summarizes 33,670 aligned gameplay objects and 45 cube phrases without bundling either source level itself.
+
+Phrase Generator v1 reads this profile at runtime. The profile chooses the distribution of phrase archetypes
+(hazard+orb+pad, hazard+pad, hazard+orb, hazard-only, and breathing phrases) and influences how aggressively
+the generator preserves dense subdivisions.
+
+This is **dataset-informed generation**, not the final trained model. These exports do not contain the player's
+actual replay/input path, so they can teach object structure, timing, state changes, and stylistic priors but
+cannot yet prove which orb or hazard was mandatory. Replay capture is the next major dataset upgrade for
+learning exact playable input sequences.
