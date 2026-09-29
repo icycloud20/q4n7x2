@@ -433,8 +433,8 @@ class $modify(GDAIEditorUI, EditorUI) {
             "First Visible Generator",
             fmt::format(
                 "Created <cg>{}</c> objects from <cy>{}</c> detected beats.<br><br>"
-                "This is the deterministic cube baseline: flat ground, beat-selected spikes, "
-                "and optional yellow orbs. It is intentionally simple so we can verify "
+                "This is the deterministic cube baseline: beat-selected spikes, jump pads, "
+                "and optional yellow orbs on the normal GD ground. It is intentionally simple so we can verify "
                 "song-to-editor placement before replacing the rules with the trained model.<br><br>"
                 "You can <cy>Undo</c> the whole generation in one step.",
                 generation.createdObjects,
