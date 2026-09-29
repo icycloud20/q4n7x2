@@ -11,6 +11,8 @@ struct BaselineGenerationResult {
     std::string error;
     std::size_t createdObjects = 0;
     std::size_t usedBeats = 0;
+    std::size_t usedMicroOnsets = 0;
+    std::size_t gameplayEvents = 0;
     double firstBeatTime = 0.0;
     double lastBeatTime = 0.0;
 };
