@@ -130,6 +130,46 @@ std::size_t addLowPlatform(
     return added;
 }
 
+std::size_t addPlatformSpan(
+    LevelEditorLayer* editorLayer,
+    float startX,
+    float endX,
+    int height,
+    std::size_t& createdObjects
+) {
+    if (height <= 0 || endX <= startX) {
+        return 0;
+    }
+
+    std::size_t added = 0;
+    float x = startX;
+
+    while (x <= endX + 1.0f) {
+        for (int layer = 0; layer < height; ++layer) {
+            float y = kGroundY + static_cast<float>(layer * 30);
+            if (addGeneratedObject(editorLayer, 1, {x, y})) {
+                ++added;
+                ++createdObjects;
+            }
+        }
+        x += 30.0f;
+    }
+
+    return added;
+}
+
+float spikeYForHeight(int height) {
+    return kGroundY + static_cast<float>(std::max(0, height) * 30);
+}
+
+float padYForHeight(int height) {
+    return kGroundPadY + static_cast<float>(std::max(0, height) * 30);
+}
+
+float orbYForHeight(int height, float extra = 90.0f) {
+    return kGroundSurfaceY + static_cast<float>(std::max(0, height) * 30) + extra;
+}
+
 AnalysisData readAnalysis(std::filesystem::path const& analysisPath, std::string& error) {
     std::ifstream input(analysisPath);
     if (!input) {
@@ -543,7 +583,13 @@ BaselineGenerationResult generateBaselineLayout(
     // Structured phrase generation. The template distribution is not arbitrary:
     // it is loaded from learned-profile-v1.json, currently produced from
     // Absolute Zero 2 + Sakura 2 aligned exports.
+    //
+    // v2 also carries a persistent path height between phrases. Earlier builds
+    // generated each four-beat chunk independently, which is why the result
+    // looked like disconnected piles of blocks. Each phrase now has to enter
+    // from the previous phrase's surface and deliberately stay, rise, or fall.
     std::size_t phraseIndex = 0;
+    int pathHeight = 0;
 
     for (std::size_t start = 4; start + 3 < beats.size(); start += 4, ++phraseIndex) {
         float x0 = positionForBeat(beats[start]).x;
@@ -580,39 +626,45 @@ BaselineGenerationResult generateBaselineLayout(
             6
         );
 
+        float currentSpikeY = spikeYForHeight(pathHeight);
+        float currentPadY = padYForHeight(pathHeight);
+
+        // If we entered this phrase above the ground, carry the previous floor
+        // into the first beat so the player never starts a phrase over empty air.
+        if (pathHeight > 0) {
+            structuredBlocks += addPlatformSpan(
+                editorLayer,
+                x0 - 45.0f,
+                x1 - 30.0f,
+                pathHeight,
+                createdObjects
+            );
+        }
+
         switch (phraseTemplate) {
             case PhraseTemplate::HazardOrbPad: {
+                int targetHeight = std::min(2, pathHeight + 1);
+
                 addCountedObject(
                     editorLayer,
                     35,
-                    {x0, kGroundPadY},
+                    {x0, currentPadY},
                     createdObjects,
                     gameplayEvents
                 );
 
-                structuredBlocks += addBlockColumn(
+                structuredBlocks += addPlatformSpan(
                     editorLayer,
-                    x1,
-                    1,
-                    createdObjects
-                );
-                structuredBlocks += addBlockColumn(
-                    editorLayer,
-                    x1 + 30.0f,
-                    2,
-                    createdObjects
-                );
-                structuredBlocks += addBlockColumn(
-                    editorLayer,
-                    x1 + 60.0f,
-                    2,
+                    x1 - 30.0f,
+                    x3 + 45.0f,
+                    targetHeight,
                     createdObjects
                 );
 
                 addCountedObject(
                     editorLayer,
                     36,
-                    {x2, kGroundSurfaceY + 105.0f},
+                    {x2, orbYForHeight(targetHeight, 78.0f)},
                     createdObjects,
                     gameplayEvents
                 );
@@ -620,7 +672,7 @@ BaselineGenerationResult generateBaselineLayout(
                 addCountedObject(
                     editorLayer,
                     8,
-                    {x3, kGroundY},
+                    {x3, spikeYForHeight(targetHeight)},
                     createdObjects,
                     gameplayEvents
                 );
@@ -629,70 +681,80 @@ BaselineGenerationResult generateBaselineLayout(
                     addCountedObject(
                         editorLayer,
                         141,
-                        {(x2 + x3) * 0.5f, kGroundSurfaceY + 75.0f},
+                        {(x2 + x3) * 0.5f, orbYForHeight(targetHeight, 54.0f)},
                         createdObjects,
                         gameplayEvents
                     );
                 }
+
+                pathHeight = targetHeight;
                 break;
             }
 
             case PhraseTemplate::HazardPad: {
+                int targetHeight = pathHeight < 2 ? pathHeight + 1 : pathHeight;
+
                 addCountedObject(
                     editorLayer,
                     35,
-                    {x0, kGroundPadY},
+                    {x0, currentPadY},
                     createdObjects,
                     gameplayEvents
                 );
 
-                structuredBlocks += addLowPlatform(
+                structuredBlocks += addPlatformSpan(
                     editorLayer,
-                    x2,
-                    3,
+                    x1 - 30.0f,
+                    x3 + 30.0f,
+                    targetHeight,
                     createdObjects
                 );
 
                 addCountedObject(
                     editorLayer,
                     8,
-                    {x3, kGroundY},
+                    {x3, spikeYForHeight(targetHeight)},
                     createdObjects,
                     gameplayEvents
                 );
 
-                if (eventBudget >= 3) {
+                if (eventBudget >= 3 && phraseEnergy > 0.50) {
                     addCountedObject(
                         editorLayer,
                         8,
-                        {x3 + 30.0f, kGroundY},
+                        {x3 + 30.0f, spikeYForHeight(targetHeight)},
                         createdObjects,
                         gameplayEvents
                     );
                 }
+
+                pathHeight = targetHeight;
                 break;
             }
 
             case PhraseTemplate::HazardOrb: {
+                if (pathHeight > 0) {
+                    structuredBlocks += addPlatformSpan(
+                        editorLayer,
+                        x1 - 30.0f,
+                        x3 + 30.0f,
+                        pathHeight,
+                        createdObjects
+                    );
+                }
+
                 addCountedObject(
                     editorLayer,
                     8,
-                    {x0, kGroundY},
+                    {x0, currentSpikeY},
                     createdObjects,
                     gameplayEvents
-                );
-
-                structuredBlocks += addLowPlatform(
-                    editorLayer,
-                    x2,
-                    phraseEnergy > 0.58 ? 4 : 2,
-                    createdObjects
                 );
 
                 addCountedObject(
                     editorLayer,
                     36,
-                    {x2, kGroundSurfaceY + 90.0f},
+                    {x2, orbYForHeight(pathHeight, 82.0f)},
                     createdObjects,
                     gameplayEvents
                 );
@@ -701,7 +763,7 @@ BaselineGenerationResult generateBaselineLayout(
                     addCountedObject(
                         editorLayer,
                         8,
-                        {x3, kGroundY},
+                        {x3, currentSpikeY},
                         createdObjects,
                         gameplayEvents
                     );
@@ -710,10 +772,20 @@ BaselineGenerationResult generateBaselineLayout(
             }
 
             case PhraseTemplate::HazardOnly: {
+                if (pathHeight > 0) {
+                    structuredBlocks += addPlatformSpan(
+                        editorLayer,
+                        x1 - 45.0f,
+                        x3 + 45.0f,
+                        pathHeight,
+                        createdObjects
+                    );
+                }
+
                 addCountedObject(
                     editorLayer,
                     8,
-                    {x1, kGroundY},
+                    {x1, currentSpikeY},
                     createdObjects,
                     gameplayEvents
                 );
@@ -722,49 +794,79 @@ BaselineGenerationResult generateBaselineLayout(
                     addCountedObject(
                         editorLayer,
                         8,
-                        {x1 + 30.0f, kGroundY},
+                        {x1 + 30.0f, currentSpikeY},
                         createdObjects,
                         gameplayEvents
                     );
                 }
 
-                if (phraseIndex % 2 == 0) {
-                    structuredBlocks += addLowPlatform(
+                if (eventBudget >= 4 && phraseIndex % 2 == 0) {
+                    addCountedObject(
                         editorLayer,
-                        x3,
-                        2,
-                        createdObjects
+                        36,
+                        {x3, orbYForHeight(pathHeight, 72.0f)},
+                        createdObjects,
+                        gameplayEvents
                     );
                 }
                 break;
             }
 
             case PhraseTemplate::PadOnly: {
+                int targetHeight = pathHeight < 2 ? pathHeight + 1 : pathHeight;
+
                 addCountedObject(
                     editorLayer,
                     35,
-                    {x1, kGroundPadY},
+                    {x1, currentPadY},
                     createdObjects,
                     gameplayEvents
                 );
 
-                structuredBlocks += addLowPlatform(
+                structuredBlocks += addPlatformSpan(
                     editorLayer,
-                    x3,
-                    3,
+                    x2 - 30.0f,
+                    x3 + 45.0f,
+                    targetHeight,
                     createdObjects
                 );
+
+                pathHeight = targetHeight;
                 break;
             }
 
             case PhraseTemplate::Quiet: {
-                // Quiet phrases deliberately breathe. A tiny safe platform gives
-                // the section a visible contour without forcing a click.
-                if (phraseIndex % 2 == 0) {
-                    structuredBlocks += addLowPlatform(
+                if (pathHeight > 0) {
+                    // Quiet phrases are also our safe way back down. Carry the
+                    // high platform through beat 1, then present a lower landing.
+                    int targetHeight = std::max(0, pathHeight - 1);
+
+                    structuredBlocks += addPlatformSpan(
                         editorLayer,
-                        (x1 + x2) * 0.5f,
-                        2,
+                        x0 - 45.0f,
+                        x1 + 15.0f,
+                        pathHeight,
+                        createdObjects
+                    );
+
+                    if (targetHeight > 0) {
+                        structuredBlocks += addPlatformSpan(
+                            editorLayer,
+                            x2 - 15.0f,
+                            x3 + 45.0f,
+                            targetHeight,
+                            createdObjects
+                        );
+                    }
+
+                    pathHeight = targetHeight;
+                } else if (phraseIndex % 2 == 0) {
+                    // Ground-level breathing section: one tiny optional ledge,
+                    // not a random wall directly in the path.
+                    structuredBlocks += addBlockColumn(
+                        editorLayer,
+                        (x2 + x3) * 0.5f,
+                        1,
                         createdObjects
                     );
                 }
