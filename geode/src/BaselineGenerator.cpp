@@ -1,10 +1,10 @@
 #include "BaselineGenerator.hpp"
 
 #include <Geode/binding/DrawGridLayer.hpp>
+#include <Geode/binding/EditorUI.hpp>
 #include <Geode/binding/GameObject.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <Geode/binding/LevelSettingsObject.hpp>
-#include <Geode/binding/UndoObject.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -24,21 +24,17 @@ float snapGridX(float x) {
     return std::round((x - 15.0f) / 30.0f) * 30.0f + 15.0f;
 }
 
-GameObject* addGeneratedObject(
-    LevelEditorLayer* editorLayer,
-    CCArray* createdObjects,
+bool addGeneratedObject(
+    EditorUI* editorUI,
     int objectID,
     CCPoint const& position
 ) {
-    auto* object = GameObject::createWithKey(objectID);
-    if (!object) {
-        return nullptr;
+    if (!editorUI) {
+        return false;
     }
 
-    object->setPosition(position);
-    editorLayer->addObject(object);
-    createdObjects->addObject(object);
-    return object;
+    editorUI->createObject(objectID, position);
+    return true;
 }
 
 std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std::string& error) {
@@ -89,12 +85,13 @@ std::vector<BeatSample> readBeats(std::filesystem::path const& analysisPath, std
 }
 
 BaselineGenerationResult generateBaselineLayout(
+    EditorUI* editorUI,
     LevelEditorLayer* editorLayer,
     std::filesystem::path const& analysisPath
 ) {
     BaselineGenerationResult result;
 
-    if (!editorLayer || !editorLayer->m_levelSettings || !editorLayer->m_drawGridLayer) {
+    if (!editorUI || !editorLayer || !editorLayer->m_levelSettings || !editorLayer->m_drawGridLayer) {
         result.error = "The editor is missing timing/settings data.";
         return result;
     }
@@ -169,7 +166,7 @@ BaselineGenerationResult generateBaselineLayout(
         return result;
     }
 
-    auto* createdObjects = CCArray::create();
+    std::size_t createdObjects = 0;
 
     // The built-in Geometry Dash ground stays untouched. The first visible
     // baseline only places gameplay events on top of it, so the generated
@@ -197,16 +194,16 @@ BaselineGenerationResult generateBaselineLayout(
         if (phraseIndex % 4 == 3) {
             // Give some phrases a non-lethal automatic jump instead of another
             // spike so the baseline is visibly more than a metronome of hazards.
-            addGeneratedObject(editorLayer, createdObjects, 35, {obstacleX, 15.0f});
+            createdObjects += addGeneratedObject(editorUI, 35, {obstacleX, 15.0f}) ? 1 : 0;
         } else {
             // Standard ground spike. Every third phrase gets a second adjacent
             // spike when there is enough room before the next detected beat.
-            addGeneratedObject(editorLayer, createdObjects, 8, {obstacleX, 15.0f});
+            createdObjects += addGeneratedObject(editorUI, 8, {obstacleX, 15.0f}) ? 1 : 0;
 
             if (phraseIndex % 3 == 2 && strongest + 1 < beats.size()) {
                 float nextBeatX = positionForBeat(beats[strongest + 1]).x;
                 if (nextBeatX - obstacleX >= 105.0f) {
-                    addGeneratedObject(editorLayer, createdObjects, 8, {obstacleX + 30.0f, 15.0f});
+                    createdObjects += addGeneratedObject(editorUI, 8, {obstacleX + 30.0f, 15.0f}) ? 1 : 0;
                 }
             }
         }
@@ -215,20 +212,17 @@ BaselineGenerationResult generateBaselineLayout(
         // not required for survival yet; this is a visible music-sync baseline,
         // not the learned gameplay generator.
         if (phraseIndex % 2 == 1) {
-            addGeneratedObject(editorLayer, createdObjects, 36, {obstacleX + 60.0f, 90.0f});
+            createdObjects += addGeneratedObject(editorUI, 36, {obstacleX + 60.0f, 90.0f}) ? 1 : 0;
         }
     }
 
-    if (createdObjects->count() == 0) {
+    if (createdObjects == 0) {
         result.error = "The generator did not create any objects.";
         return result;
     }
 
-    auto* undoObject = UndoObject::create(createdObjects, UndoCommand::Create);
-    editorLayer->addToUndoList(undoObject);
-
     result.success = true;
-    result.createdObjects = createdObjects->count();
+    result.createdObjects = createdObjects;
     result.usedBeats = beats.size();
     result.firstBeatTime = beats.front().time;
     result.lastBeatTime = beats.back().time;
