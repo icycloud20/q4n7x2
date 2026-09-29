@@ -155,13 +155,13 @@ bool shouldExport(GameObject* object) {
 matjson::Value groupsForObject(GameObject* object) {
     auto groups = matjson::Value::array();
 
-    if (!object || !object->m_groups || object->m_groupCount <= 0) {
+    if (!object || object->m_groupCount <= 0) {
         return groups;
     }
 
-    int count = std::clamp(static_cast<int>(object->m_groupCount), 0, 10);
+    int count = std::max(0, static_cast<int>(object->m_groupCount));
     for (int index = 0; index < count; ++index) {
-        groups.push(static_cast<int>((*object->m_groups)[index]));
+        groups.push(object->getGroupID(index));
     }
 
     return groups;
