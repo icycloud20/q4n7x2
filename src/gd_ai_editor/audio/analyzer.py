@@ -224,7 +224,7 @@ def write_beat_preview(
     duck = np.ones(waveform.size, dtype=np.float32)
     duck_half_width = max(1, int(sample_rate * 0.018))
     for beat_time in times:
-        center = int(round(beat_time * sample_rate))
+        center = round(beat_time * sample_rate)
         start = max(0, center - duck_half_width)
         end = min(waveform.size, center + duck_half_width)
         if end <= start:
