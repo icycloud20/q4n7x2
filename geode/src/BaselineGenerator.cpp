@@ -909,7 +909,7 @@ BaselineGenerationResult generateBaselineLayout(
         float y,
         int blockCount
     ) {
-        blockCount = std::clamp(blockCount, 2, 3);
+        blockCount = std::clamp(blockCount, 2, 4);
         float startX = centerX - static_cast<float>(blockCount - 1) * 15.0f;
         std::size_t added = 0;
 
