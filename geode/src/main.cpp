@@ -5,7 +5,9 @@
 #include <Geode/ui/Notification.hpp>
 
 #include <atomic>
-#include <cstdlib>
+#ifdef GEODE_IS_WINDOWS
+#include <Windows.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -96,24 +98,138 @@ std::string makeFileSignature(std::filesystem::path const& path) {
     return std::to_string(fileSize) + "-" + std::to_string(writeCount);
 }
 
-std::string quoteCommandArgument(std::filesystem::path const& path) {
-    auto value = path.string();
+#ifdef GEODE_IS_WINDOWS
+std::wstring quoteWindowsArgument(std::wstring const& value) {
+    if (!value.empty() && value.find_first_of(L" \t\n\v\"") == std::wstring::npos) {
+        return value;
+    }
 
-    std::string escaped;
-    escaped.reserve(value.size() + 2);
-    escaped.push_back('"');
+    std::wstring escaped;
+    escaped.push_back(L'"');
 
-    for (char character : value) {
-        if (character == '"') {
-            escaped += "\\\"";
+    for (auto iterator = value.begin(); ; ++iterator) {
+        std::size_t backslashCount = 0;
+
+        while (iterator != value.end() && *iterator == L'\\') {
+            ++backslashCount;
+            ++iterator;
+        }
+
+        if (iterator == value.end()) {
+            escaped.append(backslashCount * 2, L'\\');
+            break;
+        }
+
+        if (*iterator == L'"') {
+            escaped.append(backslashCount * 2 + 1, L'\\');
+            escaped.push_back(L'"');
         } else {
-            escaped.push_back(character);
+            escaped.append(backslashCount, L'\\');
+            escaped.push_back(*iterator);
         }
     }
 
-    escaped.push_back('"');
+    escaped.push_back(L'"');
     return escaped;
 }
+
+int runBackendProcess(
+    std::filesystem::path const& backendPath,
+    std::filesystem::path const& audioPath,
+    std::filesystem::path const& analysisPath,
+    std::filesystem::path const& previewPath,
+    std::filesystem::path const& logPath
+) {
+    SECURITY_ATTRIBUTES securityAttributes{};
+    securityAttributes.nLength = sizeof(securityAttributes);
+    securityAttributes.bInheritHandle = TRUE;
+
+    HANDLE logHandle = CreateFileW(
+        logPath.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &securityAttributes,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (logHandle == INVALID_HANDLE_VALUE) {
+        return 10000 + static_cast<int>(GetLastError());
+    }
+
+    SetFilePointer(logHandle, 0, nullptr, FILE_END);
+
+    std::vector<std::wstring> arguments = {
+        backendPath.wstring(),
+        L"audio",
+        L"analyze",
+        audioPath.wstring(),
+        L"--out",
+        analysisPath.wstring(),
+        L"--beat-preview",
+        previewPath.wstring(),
+        L"--summary",
+    };
+
+    std::wstring commandLine;
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        if (index != 0) {
+            commandLine.push_back(L' ');
+        }
+
+        commandLine += quoteWindowsArgument(arguments[index]);
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startupInfo.wShowWindow = SW_HIDE;
+    startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startupInfo.hStdOutput = logHandle;
+    startupInfo.hStdError = logHandle;
+
+    PROCESS_INFORMATION processInfo{};
+    std::wstring mutableCommandLine = commandLine;
+
+    BOOL created = CreateProcessW(
+        backendPath.c_str(),
+        mutableCommandLine.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        backendPath.parent_path().c_str(),
+        &startupInfo,
+        &processInfo
+    );
+
+    if (!created) {
+        DWORD errorCode = GetLastError();
+        CloseHandle(logHandle);
+
+        std::ofstream logFile(logPath, std::ios::out | std::ios::app);
+        if (logFile) {
+            logFile << "CreateProcessW failed with Windows error " << errorCode << "\n";
+        }
+
+        return 10000 + static_cast<int>(errorCode);
+    }
+
+    CloseHandle(logHandle);
+
+    WaitForSingleObject(processInfo.hProcess, INFINITE);
+
+    DWORD exitCode = 1;
+    GetExitCodeProcess(processInfo.hProcess, &exitCode);
+
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+
+    return static_cast<int>(exitCode);
+}
+#endif
 
 void showNotification(std::string const& message, NotificationIcon icon, float duration = 3.0f) {
     Notification::create(message, icon, duration)->show();
@@ -261,19 +377,17 @@ class $modify(GDAIEditorUI, EditorUI) {
                 }
             }
 
-            auto command =
-                quoteCommandArgument(backendPath)
-                + " audio analyze "
-                + quoteCommandArgument(audioPath)
-                + " --out "
-                + quoteCommandArgument(analysisPath)
-                + " --beat-preview "
-                + quoteCommandArgument(previewPath)
-                + " --summary >> "
-                + quoteCommandArgument(logPath)
-                + " 2>&1";
-
-            int exitCode = std::system(command.c_str());
+#ifdef GEODE_IS_WINDOWS
+            int exitCode = runBackendProcess(
+                backendPath,
+                audioPath,
+                analysisPath,
+                previewPath,
+                logPath
+            );
+#else
+            int exitCode = -1;
+#endif
             bool success = exitCode == 0 && std::filesystem::exists(analysisPath);
 
             g_analysisRunning = false;
