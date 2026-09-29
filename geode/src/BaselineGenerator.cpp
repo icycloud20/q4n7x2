@@ -391,7 +391,11 @@ BaselineGenerationResult generateBaselineLayout(
                     }
                 }
             } else if (pattern == 2) {
-                if (addGeneratedObject(editorLayer, 35, {eventX, kGroundY})) {
+                // Pads have a much lower visual/hitbox anchor than spikes. A
+                // floor pad centered around y=92 rests on the same y=90 ground
+                // surface where a spike centered at y=105 has its base.
+                constexpr float padGroundY = kGroundY - 13.0f;
+                if (addGeneratedObject(editorLayer, 35, {eventX, padGroundY})) {
                     ++createdObjects;
                     ++gameplayEvents;
                 }
