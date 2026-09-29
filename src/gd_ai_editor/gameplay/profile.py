@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
+from collections.abc import Iterable
+from itertools import pairwise
 from statistics import median
-from typing import Any, Iterable
+from typing import Any
 
 
 _TEMPLATE_BY_CATEGORIES = {
@@ -119,7 +121,7 @@ def build_motif_profile(levels: Iterable[dict[str, Any]]) -> dict[str, Any]:
             )
             phrase_cluster_counts.extend(phrase_cluster_map.values())
 
-        for left, right in zip(cluster_beats, cluster_beats[1:], strict=False):
+        for left, right in pairwise(cluster_beats):
             gap = right - left
             if gap <= 0.0 or gap > 1.0:
                 continue
