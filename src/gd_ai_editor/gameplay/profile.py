@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable
 from itertools import pairwise
 from statistics import median
 from typing import Any
@@ -56,7 +55,7 @@ def _cube_interaction_objects(level: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def build_motif_profile(levels: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def build_motif_profile(levels: list[dict[str, Any]]) -> dict[str, Any]:
     source_levels: list[str] = []
     source_object_count = 0
     cube_object_count = 0
