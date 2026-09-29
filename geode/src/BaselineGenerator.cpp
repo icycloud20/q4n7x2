@@ -171,12 +171,9 @@ BaselineGenerationResult generateBaselineLayout(
 
     auto* createdObjects = CCArray::create();
 
-    float groundStart = snapGridX(firstX - 120.0f);
-    float groundEnd = snapGridX(lastX + 150.0f);
-
-    for (float x = groundStart; x <= groundEnd; x += 30.0f) {
-        addGeneratedObject(editorLayer, createdObjects, 1, {x, 105.0f});
-    }
+    // The built-in Geometry Dash ground stays untouched. The first visible
+    // baseline only places gameplay events on top of it, so the generated
+    // section starts playable instead of forcing the cube into a block wall.
 
     // One rhythm event per four-beat phrase. The strongest detected beat in
     // each phrase receives the obstacle so the preview visibly follows the song
@@ -197,14 +194,20 @@ BaselineGenerationResult generateBaselineLayout(
 
         float obstacleX = snapGridX(positionForBeat(beats[strongest]).x);
 
-        // Standard spike. Every third phrase gets a second adjacent spike when
-        // there is enough room before the next detected beat.
-        addGeneratedObject(editorLayer, createdObjects, 8, {obstacleX, 135.0f});
+        if (phraseIndex % 4 == 3) {
+            // Give some phrases a non-lethal automatic jump instead of another
+            // spike so the baseline is visibly more than a metronome of hazards.
+            addGeneratedObject(editorLayer, createdObjects, 35, {obstacleX, 15.0f});
+        } else {
+            // Standard ground spike. Every third phrase gets a second adjacent
+            // spike when there is enough room before the next detected beat.
+            addGeneratedObject(editorLayer, createdObjects, 8, {obstacleX, 15.0f});
 
-        if (phraseIndex % 3 == 2 && strongest + 1 < beats.size()) {
-            float nextBeatX = positionForBeat(beats[strongest + 1]).x;
-            if (nextBeatX - obstacleX >= 105.0f) {
-                addGeneratedObject(editorLayer, createdObjects, 8, {obstacleX + 30.0f, 135.0f});
+            if (phraseIndex % 3 == 2 && strongest + 1 < beats.size()) {
+                float nextBeatX = positionForBeat(beats[strongest + 1]).x;
+                if (nextBeatX - obstacleX >= 105.0f) {
+                    addGeneratedObject(editorLayer, createdObjects, 8, {obstacleX + 30.0f, 15.0f});
+                }
             }
         }
 
@@ -212,7 +215,7 @@ BaselineGenerationResult generateBaselineLayout(
         // not required for survival yet; this is a visible music-sync baseline,
         // not the learned gameplay generator.
         if (phraseIndex % 2 == 1) {
-            addGeneratedObject(editorLayer, createdObjects, 36, {obstacleX + 45.0f, 195.0f});
+            addGeneratedObject(editorLayer, createdObjects, 36, {obstacleX + 60.0f, 90.0f});
         }
     }
 
