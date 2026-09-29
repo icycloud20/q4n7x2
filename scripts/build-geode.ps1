@@ -16,9 +16,9 @@ if (-not $SkipBackend) {
 
     python -m pip install -U pip
     python -m pip install -e .
-    python -m pip install "pyinstaller>=6,<7"
+    python -m pip install "pyinstaller>=6,<7" tbb
 
-    python -m PyInstaller --noconfirm --clean --onefile --name gd-ai-backend --collect-all librosa --collect-all soundfile --distpath "$RepositoryRoot\backend-dist" --workpath "$RepositoryRoot\backend-build" --specpath "$RepositoryRoot\backend-build" "$RepositoryRoot\backend_entry.py"
+    python -m PyInstaller --noconfirm --clean --onefile --name gd-ai-backend --collect-all librosa --collect-all soundfile --collect-all numba --collect-all llvmlite --distpath "$RepositoryRoot\backend-dist" --workpath "$RepositoryRoot\backend-build" --specpath "$RepositoryRoot\backend-build" "$RepositoryRoot\backend_entry.py"
 
     New-Item -ItemType Directory -Force -Path $ResourcesDirectory | Out-Null
     Copy-Item "$RepositoryRoot\backend-dist\gd-ai-backend.exe" $BackendExecutable -Force
