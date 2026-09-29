@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -248,6 +249,18 @@ class $modify(GDAIEditorUI, EditorUI) {
             previewPath,
             logPath
         ] {
+            {
+                std::ofstream logFile(logPath, std::ios::out | std::ios::trunc);
+                if (logFile) {
+                    logFile
+                        << "GD AI Editor backend launch\n"
+                        << "Backend: " << backendPath.string() << "\n"
+                        << "Audio: " << audioPath.string() << "\n"
+                        << "Analysis: " << analysisPath.string() << "\n"
+                        << "Preview: " << previewPath.string() << "\n\n";
+                }
+            }
+
             auto command =
                 quoteCommandArgument(backendPath)
                 + " audio analyze "
@@ -256,7 +269,7 @@ class $modify(GDAIEditorUI, EditorUI) {
                 + quoteCommandArgument(analysisPath)
                 + " --beat-preview "
                 + quoteCommandArgument(previewPath)
-                + " --summary > "
+                + " --summary >> "
                 + quoteCommandArgument(logPath)
                 + " 2>&1";
 
@@ -293,6 +306,16 @@ class $modify(GDAIEditorUI, EditorUI) {
                         exitCode,
                         logPath.string()
                     );
+
+                    FLAlertLayer::create(
+                        "Analysis Failed",
+                        fmt::format(
+                            "The audio backend exited with code <cr>{}</c>.<br><br>A diagnostic log was written to:<br><cy>{}</c>",
+                            exitCode,
+                            logPath.string()
+                        ),
+                        "OK"
+                    )->show();
                 }
             });
         }).detach();
