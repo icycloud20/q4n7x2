@@ -494,6 +494,39 @@ StructuralMotif const* chooseStructuralMotif(
             continue;
         }
 
+        // Path-first v3 deliberately rejects state-changing / extreme motifs
+        // until their entire transition can be solved as a verified path. A
+        // partial gravity/mini/portal sequence is much worse than a simpler
+        // playable connector.
+        if (motif.exitInverted != inverted || motif.exitMini != mini) {
+            continue;
+        }
+
+        if (
+            std::abs(motif.exitDeltaY) > 120.0f
+            || motif.maxRelativeY - motif.minRelativeY > 270.0f
+        ) {
+            continue;
+        }
+
+        bool containsPortal = false;
+        std::size_t actionCount = 0;
+
+        for (auto const& event : motif.events) {
+            if (event.kind == MotifKind::Portal) {
+                containsPortal = true;
+                break;
+            }
+
+            if (event.kind == MotifKind::Orb || event.kind == MotifKind::Pad) {
+                ++actionCount;
+            }
+        }
+
+        if (containsPortal || actionCount > 8) {
+            continue;
+        }
+
         float adjustedAnchor = anchorY;
         if (adjustedAnchor + motif.minRelativeY < kGroundY) {
             adjustedAnchor = kGroundY - motif.minRelativeY;
@@ -771,6 +804,7 @@ BaselineGenerationResult generateBaselineLayout(
         MotifKind kind;
     };
     std::vector<PlacedStructure> placedStructures;
+    std::vector<CCPoint> placedActions;
 
     auto snappedStructurePosition = [](CCPoint position) {
         position.x = std::round(position.x / 15.0f) * 15.0f;
@@ -838,6 +872,57 @@ BaselineGenerationResult generateBaselineLayout(
         return added;
     };
 
+    auto addCleanAction = [&](
+        int objectID,
+        CCPoint position,
+        float rotation
+    ) {
+        position.x = std::round(position.x / 15.0f) * 15.0f;
+        position.y = std::round(position.y / 15.0f) * 15.0f;
+
+        for (auto const& placed : placedActions) {
+            if (
+                std::abs(position.x - placed.x) < 24.0f
+                && std::abs(position.y - placed.y) < 30.0f
+            ) {
+                return false;
+            }
+        }
+
+        if (!addGeneratedObjectWithRotation(
+            editorLayer,
+            objectID,
+            position,
+            rotation
+        )) {
+            return false;
+        }
+
+        placedActions.push_back(position);
+        ++createdObjects;
+        ++gameplayEvents;
+        return true;
+    };
+
+    auto addLandingPlatform = [&](
+        float centerX,
+        float y,
+        int blockCount
+    ) {
+        blockCount = std::clamp(blockCount, 2, 3);
+        float startX = centerX - static_cast<float>(blockCount - 1) * 15.0f;
+        std::size_t added = 0;
+
+        for (int index = 0; index < blockCount; ++index) {
+            float x = startX + static_cast<float>(index * 30);
+            if (addCleanStructure(1, MotifKind::Solid, {x, y}, 0.0f)) {
+                ++added;
+            }
+        }
+
+        return added;
+    };
+
     auto positionForBeatOffset = [&](std::size_t startIndex, double beatOffset) {
         beatOffset = std::clamp(beatOffset, 0.0, 8.0);
 
@@ -892,96 +977,168 @@ BaselineGenerationResult generateBaselineLayout(
                 // If the current state has no matching motif, keep a safe short
                 // connector instead of inventing a random object combination.
                 float x0 = positionForBeat(beats[start]).x;
-                float x2 = positionForBeat(beats[start + 2]).x;
-                addCleanBridge(x0, x2, pathAnchorY);
+                float x8 = positionForBeat(beats[start + 8]).x;
+                addCleanBridge(x0, x8, pathAnchorY);
                 continue;
             }
 
             float motifAnchorY = pathAnchorY;
 
-            if (motifAnchorY + motif->minRelativeY < kGroundY) {
-                motifAnchorY = kGroundY - motif->minRelativeY;
+            // The learned motif now supplies intent, not literal geometry.
+            // First solve a conservative landing path with 30-unit vertical
+            // steps, then place a small number of learned actions around it.
+            float requestedDeltaY = std::clamp(
+                motif->exitDeltaY,
+                -120.0f,
+                120.0f
+            );
+            float snappedDeltaY =
+                std::round(requestedDeltaY / 30.0f) * 30.0f;
+            float targetY = std::clamp(
+                motifAnchorY + snappedDeltaY,
+                kGroundY,
+                825.0f
+            );
+
+            auto pathYForProgress = [&](double progress) {
+                progress = std::clamp(progress, 0.0, 1.0);
+                float rawY =
+                    motifAnchorY
+                    + (targetY - motifAnchorY) * static_cast<float>(progress);
+                float relative =
+                    std::round((rawY - motifAnchorY) / 30.0f) * 30.0f;
+                return std::clamp(
+                    motifAnchorY + relative,
+                    kGroundY,
+                    825.0f
+                );
+            };
+
+            float chunkStartX = positionForBeatOffset(start, 0.0).x;
+            float chunkEndX = positionForBeatOffset(start, 8.0).x;
+            float chunkWidth = chunkEndX - chunkStartX;
+
+            if (
+                !std::isfinite(chunkStartX)
+                || !std::isfinite(chunkEndX)
+                || chunkWidth <= 0.0f
+            ) {
+                continue;
             }
-            if (motifAnchorY + motif->maxRelativeY > 900.0f) {
-                motifAnchorY = 900.0f - motif->maxRelativeY;
+
+            int horizontalSegments = std::max(
+                4,
+                static_cast<int>(std::ceil(chunkWidth / 150.0f))
+            );
+            int verticalSegments = static_cast<int>(
+                std::ceil(std::abs(targetY - motifAnchorY) / 30.0f)
+            );
+            int pathSegments = std::clamp(
+                std::max(horizontalSegments, verticalSegments),
+                4,
+                12
+            );
+
+            // Build small landing islands. They are intentionally sparse enough
+            // to remain gameplay instead of becoming a giant solid rectangle,
+            // but close enough that ordinary cube jumps can connect them.
+            for (int segment = 0; segment <= pathSegments; ++segment) {
+                double progress =
+                    static_cast<double>(segment)
+                    / static_cast<double>(pathSegments);
+                float x =
+                    chunkStartX
+                    + chunkWidth * static_cast<float>(progress);
+                float y = pathYForProgress(progress);
+                int width =
+                    (segment == 0 || segment == pathSegments) ? 3 : 2;
+                addLandingPlatform(x, y, width);
             }
 
-            // Place support blocks first, then slopes. This gives solid geometry
-            // priority and rejects slopes that would cut through the blocks.
-            for (auto const& event : motif->events) {
-                if (event.kind != MotifKind::Solid) {
-                    continue;
-                }
-
-                auto position = positionForBeatOffset(start, event.beatOffset);
-                position.y = motifAnchorY + event.relativeY;
-
-                if (std::isfinite(position.x) && std::isfinite(position.y)) {
-                    addCleanStructure(
-                        event.objectID,
-                        event.kind,
-                        position,
-                        event.rotation
-                    );
-                }
-            }
-
-            for (auto const& event : motif->events) {
-                if (event.kind != MotifKind::Slope) {
-                    continue;
-                }
-
-                auto position = positionForBeatOffset(start, event.beatOffset);
-                position.y = motifAnchorY + event.relativeY;
-
-                if (std::isfinite(position.x) && std::isfinite(position.y)) {
-                    addCleanStructure(
-                        event.objectID,
-                        event.kind,
-                        position,
-                        event.rotation
-                    );
-                }
-            }
+            // Pull only the interaction intent from the learned structure.
+            // Literal learned solids/slopes are intentionally not copied here:
+            // their source spacing is song-specific and was the main cause of
+            // overlap, broken slopes and impossible vertical offsets.
+            int maximumActions = std::clamp(
+                profile.recommendedMaxEvents,
+                2,
+                4
+            );
+            int placedChunkActions = 0;
+            double previousActionBeat = -10.0;
 
             for (auto const& event : motif->events) {
                 if (
-                    event.kind == MotifKind::Solid
-                    || event.kind == MotifKind::Slope
+                    event.kind != MotifKind::Orb
+                    && event.kind != MotifKind::Pad
                 ) {
                     continue;
                 }
 
-                auto position = positionForBeatOffset(start, event.beatOffset);
-                position.y = motifAnchorY + event.relativeY;
+                if (placedChunkActions >= maximumActions) {
+                    break;
+                }
+
+                if (
+                    event.beatOffset < 0.5
+                    || event.beatOffset > 7.5
+                    || event.beatOffset - previousActionBeat < 0.85
+                ) {
+                    continue;
+                }
+
+                // Ceiling-facing pads are not useful for a normal-gravity
+                // path. They can return once inverted path solving is enabled.
+                if (
+                    event.kind == MotifKind::Pad
+                    && std::abs(event.rotation) > 90.0f
+                ) {
+                    continue;
+                }
+
+                auto position =
+                    positionForBeatOffset(start, event.beatOffset);
+                double progress =
+                    std::clamp(event.beatOffset / 8.0, 0.0, 1.0);
+                float pathY = pathYForProgress(progress);
+
+                if (event.kind == MotifKind::Pad) {
+                    addLandingPlatform(position.x, pathY, 2);
+                    position.y = pathY + 15.0f;
+                } else {
+                    float learnedPathY =
+                        motif->exitDeltaY
+                        * static_cast<float>(progress);
+                    float localOffset =
+                        event.relativeY - learnedPathY;
+                    float orbHeight = std::clamp(
+                        60.0f + std::abs(localOffset) * 0.20f,
+                        60.0f,
+                        105.0f
+                    );
+                    position.y = pathY + orbHeight;
+                }
 
                 if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
                     continue;
                 }
 
-                if (
-                    !addGeneratedObjectWithRotation(
-                        editorLayer,
-                        event.objectID,
-                        position,
-                        event.rotation
-                    )
-                ) {
-                    continue;
+                if (addCleanAction(
+                    event.objectID,
+                    position,
+                    event.kind == MotifKind::Pad ? 0.0f : event.rotation
+                )) {
+                    previousActionBeat = event.beatOffset;
+                    ++placedChunkActions;
                 }
-
-                ++createdObjects;
-                ++gameplayEvents;
             }
 
             twoBackMotif = previousMotif;
             previousMotif = motif;
 
-            pathAnchorY = std::clamp(
-                motifAnchorY + motif->exitDeltaY,
-                kGroundY,
-                900.0f
-            );
+            // Advance from the path we actually built, never from discarded raw
+            // geometry. This keeps the next chunk anchored to a real landing.
+            pathAnchorY = targetY;
             currentInverted = motif->exitInverted;
             currentMini = motif->exitMini;
             ++result.phraseCount;
