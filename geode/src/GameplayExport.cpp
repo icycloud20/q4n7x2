@@ -143,6 +143,78 @@ std::string objectCategory(GameObjectType type) {
     return "other";
 }
 
+std::string modifierNameForID(int objectID) {
+    switch (objectID) {
+        case 200: return "speed_slow";
+        case 201: return "speed_normal";
+        case 202: return "speed_fast";
+        case 203: return "speed_faster";
+        case 1334: return "speed_fastest";
+        case 901: return "move_trigger";
+        case 1006: return "pulse_trigger";
+        case 1007: return "alpha_trigger";
+        case 1049: return "toggle_trigger";
+        case 1268: return "spawn_trigger";
+        case 1346: return "rotate_trigger";
+        case 1347: return "follow_trigger";
+        case 1616: return "stop_trigger";
+        case 1815: return "collision_trigger";
+        case 2067: return "scale_trigger";
+        case 2068: return "advanced_random_trigger";
+        case 1912: return "random_trigger";
+        case 3032: return "keyframe_object";
+        case 3033: return "keyframe_animation_trigger";
+        case 3614: return "time_trigger";
+        case 3615: return "time_event_trigger";
+        case 3617: return "time_control_trigger";
+        default: return "";
+    }
+}
+
+matjson::Value triggerDataForObject(GameObject* object) {
+    auto data = matjson::Value::object();
+
+    auto* effect = typeinfo_cast<EffectGameObject*>(object);
+    if (!effect) {
+        return data;
+    }
+
+    auto modifierName = modifierNameForID(object->m_objectID);
+    if (!modifierName.empty()) {
+        data["name"] = modifierName;
+    }
+
+    data["target_group_id"] = effect->m_targetGroupID;
+    data["center_group_id"] = effect->m_centerGroupID;
+    data["duration"] = effect->m_duration;
+    data["spawn_triggered"] = effect->m_isSpawnTriggered;
+    data["touch_triggered"] = effect->m_isTouchTriggered;
+    data["multi_triggered"] = effect->m_isMultiTriggered;
+    data["trigger_on_exit"] = effect->m_triggerOnExit;
+    data["activate_group"] = effect->m_activateGroup;
+    data["opacity"] = effect->m_opacity;
+
+    auto move = matjson::Value::object();
+    move["x"] = effect->m_moveOffset.x;
+    move["y"] = effect->m_moveOffset.y;
+    data["move_offset"] = move;
+
+    data["rotation_degrees"] = effect->m_rotationDegrees;
+    data["times_360"] = effect->m_times360;
+    data["lock_object_rotation"] = effect->m_lockObjectRotation;
+    data["rotation_target_id"] = effect->m_rotationTargetID;
+
+    data["easing_type"] = static_cast<int>(effect->m_easingType);
+    data["easing_rate"] = effect->m_easingRate;
+    data["order"] = effect->m_ordValue;
+    data["channel"] = effect->m_channelValue;
+    data["item_id"] = effect->m_itemID;
+    data["item_id_2"] = effect->m_itemID2;
+    data["control_id"] = effect->m_controlID;
+
+    return data;
+}
+
 bool shouldExport(GameObject* object) {
     if (!object) {
         return false;
@@ -296,6 +368,11 @@ GameplayExportResult exportGameplayTimeline(
         objectJson["editor_layer"] = static_cast<int>(object->m_editorLayer);
         objectJson["editor_layer_2"] = static_cast<int>(object->m_editorLayer2);
         objectJson["groups"] = groupsForObject(object);
+
+        if (auto* effectObject = typeinfo_cast<EffectGameObject*>(object)) {
+            (void)effectObject;
+            objectJson["trigger"] = triggerDataForObject(object);
+        }
 
         auto const& hitbox = object->getObjectRect();
         auto hitboxJson = matjson::Value::object();
