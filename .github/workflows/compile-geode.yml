@@ -1,0 +1,25 @@
+name: Geode Compile Check
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: Compile Geode C++
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile Geode mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          path: geode
+          sdk: given
+          target: Win64
+          build-config: Release
