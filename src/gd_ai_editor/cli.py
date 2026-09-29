@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 
 from gd_ai_editor.audio import analyze_audio, write_beat_preview
-from gd_ai_editor.gameplay import align_gameplay_export, load_json, write_json
+from gd_ai_editor.gameplay import (
+    align_gameplay_export,
+    build_motif_profile,
+    load_json,
+    write_json,
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -115,6 +120,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Training-window stride in beats (default: 4)",
     )
 
+    profile_parser = gameplay_commands.add_parser(
+        "profile",
+        help="Learn phrase-level gameplay priors from aligned level exports",
+    )
+    profile_parser.add_argument(
+        "aligned_files",
+        nargs="+",
+        type=Path,
+        help="One or more aligned gameplay JSON exports",
+    )
+    profile_parser.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="Path to the learned motif-profile JSON file",
+    )
+
     return parser
 
 
@@ -157,6 +179,16 @@ def main() -> None:
         print(f"Wrote {output}")
         print(f"Aligned objects: {len(aligned.get('objects', []))}")
         print(f"Training windows: {len(aligned.get('windows', []))}")
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "profile":
+        levels = [load_json(path) for path in arguments.aligned_files]
+        profile = build_motif_profile(levels)
+        output = write_json(arguments.out, profile)
+        print(f"Wrote {output}")
+        print(f"Source levels: {profile['source_level_count']}")
+        print(f"Cube phrases: {profile['cube_phrase_count']}")
+        print(f"Template weights: {profile['template_weights']}")
         return
 
     parser.error("Unknown command")
