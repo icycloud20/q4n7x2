@@ -906,7 +906,6 @@ BaselineGenerationResult generateBaselineLayout(
                 motifAnchorY = 900.0f - motif->maxRelativeY;
             }
 
-            double firstStructureBeat = 8.0;
             // Place support blocks first, then slopes. This gives solid geometry
             // priority and rejects slopes that would cut through the blocks.
             for (auto const& event : motif->events) {
