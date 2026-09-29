@@ -4,6 +4,7 @@
 #include <Geode/ui/BasedButtonSprite.hpp>
 #include <Geode/ui/Notification.hpp>
 
+#include "BaselineGenerator.hpp"
 #include "GameplayExport.hpp"
 
 #include <atomic>
@@ -328,8 +329,13 @@ class $modify(GDAIEditorUI, EditorUI) {
             0.42f,
             EditorBaseColor::LightBlue
         );
+        auto generateSprite = EditorButtonSprite::createWithSpriteFrameName(
+            "GJ_plusBtn_001.png",
+            0.42f,
+            EditorBaseColor::LightBlue
+        );
 
-        if (!analyzeSprite || !exportSprite) {
+        if (!analyzeSprite || !exportSprite || !generateSprite) {
             log::error("GD AI Editor could not create its editor button sprites");
             return true;
         }
@@ -344,20 +350,98 @@ class $modify(GDAIEditorUI, EditorUI) {
             this,
             menu_selector(GDAIEditorUI::onExportGameplay)
         );
+        auto generateButton = CCMenuItemSpriteExtra::create(
+            generateSprite,
+            this,
+            menu_selector(GDAIEditorUI::onGenerateBaseline)
+        );
 
         analyzeButton->setID("analyze-song-button"_spr);
         exportButton->setID("export-gameplay-button"_spr);
+        generateButton->setID("generate-baseline-button"_spr);
 
         menu->addChild(analyzeButton);
         menu->addChild(exportButton);
+        menu->addChild(generateButton);
         menu->updateLayout();
 
         if (this->m_uiItems) {
             this->m_uiItems->addObject(analyzeButton);
             this->m_uiItems->addObject(exportButton);
+            this->m_uiItems->addObject(generateButton);
         }
 
         return true;
+    }
+
+    void onGenerateBaseline(CCObject*) {
+        auto* editorLayer = this->m_editorLayer;
+        auto* level = editorLayer ? editorLayer->m_level : nullptr;
+
+        if (!editorLayer || !level) {
+            FLAlertLayer::create(
+                "GD AI Editor",
+                "Could not read the current editor level.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto audioPath = resolveAudioPath(level);
+        if (audioPath.empty()) {
+            FLAlertLayer::create(
+                "Song Not Found",
+                "Download this level's song in Geometry Dash first.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto songDirectory = Mod::get()->getSaveDir() / "song-cache" / makeSongKey(level);
+        auto signature = makeFileSignature(audioPath);
+        constexpr auto cacheVersion = "v2";
+        auto analysisPath =
+            songDirectory / ("analysis-" + std::string(cacheVersion) + "-" + signature + ".json");
+
+        if (!std::filesystem::exists(analysisPath)) {
+            FLAlertLayer::create(
+                "Analyze Song First",
+                "Press the <cy>music-note</c> GD AI button once before generating a layout.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto generation = generateBaselineLayout(editorLayer, analysisPath);
+
+        if (!generation.success) {
+            FLAlertLayer::create(
+                "Generator Preview",
+                generation.error,
+                "OK"
+            )->show();
+            return;
+        }
+
+        showNotification(
+            fmt::format("Generated {} beat-synced objects.", generation.createdObjects),
+            NotificationIcon::Success,
+            4.0f
+        );
+
+        FLAlertLayer::create(
+            "First Visible Generator",
+            fmt::format(
+                "Created <cg>{}</c> objects from <cy>{}</c> detected beats.<br><br>"
+                "This is the deterministic cube baseline: flat ground, beat-selected spikes, "
+                "and optional yellow orbs. It is intentionally simple so we can verify "
+                "song-to-editor placement before replacing the rules with the trained model.<br><br>"
+                "You can <cy>Undo</c> the whole generation in one step.",
+                generation.createdObjects,
+                generation.usedBeats
+            ),
+            "OK"
+        )->show();
     }
 
     void onExportGameplay(CCObject*) {
