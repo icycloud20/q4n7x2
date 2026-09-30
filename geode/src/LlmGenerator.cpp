@@ -646,6 +646,73 @@ LlmGenerationResult generateLlmLayout(
     float pathY = 135.0f;
     std::string currentMode = "cube";
 
+    if (sections.empty()) {
+        result.error = "Luna did not return any playable sections.";
+        return result;
+    }
+
+    for (auto const& section : sections) {
+        if (section.renderObjects.empty()) {
+            result.error =
+                "A Luna section did not have validated human reference geometry. "
+                "Generation was cancelled instead of using procedural fallback.";
+            return result;
+        }
+
+        std::size_t hazardCount = 0;
+        for (auto const& object : section.renderObjects) {
+            if (object.category == "hazard") {
+                ++hazardCount;
+            }
+        }
+
+        if (section.renderObjects.size() > 180 || hazardCount > 24) {
+            result.error =
+                "A retrieved human section was too dense to transplant safely. "
+                "Generation was cancelled before placing objects.";
+            return result;
+        }
+    }
+
+    auto const& firstSection = sections.front();
+    if (firstSection.mode != "cube") {
+        result.error = "Validated generation must begin in cube mode.";
+        return result;
+    }
+
+    int supportedEntryBlocks = 0;
+    for (auto const& object : firstSection.renderObjects) {
+        if (
+            object.category == "solid"
+            && object.beat <= 0.35
+            && std::abs(object.relativeY - firstSection.entryYOffset) <= 45.0f
+        ) {
+            ++supportedEntryBlocks;
+        }
+    }
+
+    if (supportedEntryBlocks < 2) {
+        result.error =
+            "The first Luna section does not have a supported playable cube entry. "
+            "Generation was cancelled before placing objects.";
+        return result;
+    }
+
+    // Always give the player a deterministic runway into the first validated
+    // human pair. This prevents generated gameplay from beginning mid-jump.
+    float runwayStartX = positionForAudioTime(beats.front().time).x;
+    float runwayEndX = positionForSectionBeat(0, 0.35).x;
+
+    if (std::isfinite(runwayStartX) && std::isfinite(runwayEndX)) {
+        if (runwayEndX < runwayStartX) {
+            std::swap(runwayStartX, runwayEndX);
+        }
+
+        for (float x = runwayStartX; x <= runwayEndX + 1.0f; x += 30.0f) {
+            addBlock(x, kGroundY);
+        }
+    }
+
     for (auto const& section : sections) {
         std::size_t beatStartIndex = 4 + section.index * 8;
         if (beatStartIndex + 8 >= beats.size()) {
