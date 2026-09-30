@@ -123,30 +123,32 @@ Before training the first model:
 6. then generate cube-only training sequences.
 
 
-## Learned phrase profile
+## Learned gameplay profile
 
-Aligned exports can now be compressed into a reusable cube phrase prior:
+Aligned exports are compressed into a reusable mode-aware prior:
 
 ```text
 gd-ai gameplay profile level-a-aligned.json level-b-aligned.json --out learned-profile.json
 ```
 
-The profile currently learns:
+The current profile learns separately for cube, ship, ball, UFO, wave, robot, spider, and swing:
 
-- which interaction combinations occur together inside four-beat cube phrases,
-- relative frequencies of hazard / orb / pad / portal objects,
+- interaction density and four-beat phrase density,
+- hazard / orb / pad / portal ratios,
 - quarter-beat phase usage,
 - common interaction-cluster gaps quantized to 1/16-beat steps,
-- a compressed phrase-density prior.
+- reconstructed mode-section lengths,
+- mode-to-mode transition probabilities,
+- difficulty-specific subprofiles when a difficulty label is available.
 
-The bundled `learned-profile-v1.json` was produced from the current Absolute Zero 2 and Sakura 2 exports.
-It summarizes 33,670 aligned gameplay objects and 45 cube phrases without bundling either source level itself.
+The bundled runtime profile is currently retrained from 12 aligned levels: 8 manually
+labeled Hard Demons plus the 4 original reference exports (Absolute Zero 2, Sakura 2,
+Seven Seas Layout, and Moonman Layout). The original Seven Seas / Moonman structural
+motifs remain style anchors while the larger dataset drives Hard Demon density and mode
+cadence.
 
-Phrase Generator v1 reads this profile at runtime. The profile chooses the distribution of phrase archetypes
-(hazard+orb+pad, hazard+pad, hazard+orb, hazard-only, and breathing phrases) and influences how aggressively
-the generator preserves dense subdivisions.
+This is still **dataset-informed generation**, not a replay-trained policy. Editor exports
+can teach structure, timing, state changes, density, and creator habits, but they cannot
+prove which exact orb press, hold, or release was mandatory. A trajectory/input solver is
+still required before generated gameplay can be validated from actual player actions.
 
-This is **dataset-informed generation**, not the final trained model. These exports do not contain the player's
-actual replay/input path, so they can teach object structure, timing, state changes, and stylistic priors but
-cannot yet prove which orb or hazard was mandatory. Replay capture is the next major dataset upgrade for
-learning exact playable input sequences.
