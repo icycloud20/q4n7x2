@@ -343,6 +343,7 @@ std::vector<PlannedSection> readPlan(
                         && object.category != "hazard"
                         && object.category != "orb"
                         && object.category != "pad"
+                        && object.category != "collision"
                     )
                 ) {
                     continue;
