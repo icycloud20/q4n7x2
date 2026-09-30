@@ -20,6 +20,8 @@ struct BaselineGenerationResult {
     std::size_t learnedSourceLevels = 0;
     std::size_t learnedSourcePhrases = 0;
     std::size_t learnedMotifCount = 0;
+    std::string targetDifficulty = "Hard Demon";
+    double targetDifficultyScore = 0.8;
     bool learnedProfileLoaded = false;
     bool learnedStructuralProfileLoaded = false;
     double firstBeatTime = 0.0;
