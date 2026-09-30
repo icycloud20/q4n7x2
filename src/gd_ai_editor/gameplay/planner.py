@@ -1293,26 +1293,35 @@ def _attach_reference_render_sections(
 
         render_objects: list[dict[str, Any]] = []
         source_levels: list[str] = []
-        current_exit = 0.0
         section_entry = 0.0
+        current_exit = 0.0
+        route_anchors: list[float] = []
         target_speed_multiplier = _speed_multiplier(target_speed)
 
-        for micro_index, reference in enumerate(typed_references):
-            source_levels.append(str(reference.get("level", "")))
+        for pair_index in range(4):
+            first = typed_references[pair_index * 2]
+            second = typed_references[pair_index * 2 + 1]
 
-            entry_y = float(reference.get("entry_y_offset", 0.0) or 0.0)
-            exit_y = float(reference.get("exit_y_offset", 0.0) or 0.0)
+            first_anchor = float(first.get("source_anchor_y", 0.0) or 0.0)
+            second_anchor = float(second.get("source_anchor_y", 0.0) or 0.0)
+
+            pair_entry_source = first_anchor + float(
+                first.get("entry_y_offset", 0.0) or 0.0
+            )
+            pair_exit_source = second_anchor + float(
+                second.get("exit_y_offset", 0.0) or 0.0
+            )
 
             vertical_scale = 1.0
             if str(section.get("mode", "")) == "wave":
-                entry_state = reference.get("entry")
+                entry_state = first.get("entry")
                 source_speed = (
                     str(entry_state.get("speed", "normal"))
                     if isinstance(entry_state, dict)
                     else "normal"
                 )
                 source_spb = float(
-                    reference.get("source_seconds_per_beat", 0.0) or 0.0
+                    first.get("source_seconds_per_beat", 0.0) or 0.0
                 )
                 timing_scale = (
                     target_seconds_per_beat / source_spb
@@ -1324,44 +1333,53 @@ def _attach_reference_render_sections(
                     / _speed_multiplier(source_speed)
                     * timing_scale
                 )
-                vertical_scale = min(1.45, max(0.70, vertical_scale))
+                vertical_scale = min(1.35, max(0.75, vertical_scale))
 
-            entry_y *= vertical_scale
-            exit_y *= vertical_scale
+            pair_entry = (pair_entry_source - first_anchor) * vertical_scale
+            pair_exit = (pair_exit_source - first_anchor) * vertical_scale
+            pair_shift = 0.0 if pair_index == 0 else current_exit - pair_entry
 
-            y_shift = 0.0 if micro_index == 0 else current_exit - entry_y
-            if micro_index == 0:
-                section_entry = entry_y
+            if pair_index == 0:
+                section_entry = pair_entry
+                route_anchors.append(section_entry)
 
-            for item in reference.get("geometry_cells", []):
-                if not isinstance(item, dict):
-                    continue
-
-                beat_offset = _finite_number(item.get("beat_offset"))
-                relative_y = _finite_number(item.get("relative_y"))
-                if beat_offset is None or relative_y is None:
-                    continue
-
-                chunk_beats = float(reference.get("beats", 1.0) or 1.0)
-                if beat_offset < 0.0 or beat_offset > chunk_beats + 1e-6:
-                    continue
-
-                render_objects.append(
-                    {
-                        "beat": round(micro_index + beat_offset, 4),
-                        "relative_y": round(
-                            relative_y * vertical_scale + y_shift,
-                            2,
-                        ),
-                        "category": str(item.get("category", "")),
-                        "object_id": int(item.get("object_id", 0) or 0),
-                        "rotation": float(item.get("rotation", 0.0) or 0.0),
-                        "scale_x": float(item.get("scale_x", 1.0) or 1.0),
-                        "scale_y": float(item.get("scale_y", 1.0) or 1.0),
-                    }
+            for local_index, reference in enumerate((first, second)):
+                reference_anchor = float(
+                    reference.get("source_anchor_y", 0.0) or 0.0
                 )
+                anchor_delta = reference_anchor - first_anchor
+                source_levels.append(str(reference.get("level", "")))
 
-            current_exit = exit_y + y_shift
+                for item in reference.get("geometry_cells", []):
+                    if not isinstance(item, dict):
+                        continue
+
+                    beat_offset = _finite_number(item.get("beat_offset"))
+                    relative_y = _finite_number(item.get("relative_y"))
+                    if beat_offset is None or relative_y is None:
+                        continue
+
+                    source_relative_y = anchor_delta + relative_y
+                    render_objects.append(
+                        {
+                            "beat": round(
+                                pair_index * 2.0 + local_index + beat_offset,
+                                4,
+                            ),
+                            "relative_y": round(
+                                source_relative_y * vertical_scale + pair_shift,
+                                2,
+                            ),
+                            "category": str(item.get("category", "")),
+                            "object_id": int(item.get("object_id", 0) or 0),
+                            "rotation": float(item.get("rotation", 0.0) or 0.0),
+                            "scale_x": float(item.get("scale_x", 1.0) or 1.0),
+                            "scale_y": float(item.get("scale_y", 1.0) or 1.0),
+                        }
+                    )
+
+            current_exit = pair_exit + pair_shift
+            route_anchors.append(current_exit)
 
         unique: dict[tuple[Any, ...], dict[str, Any]] = {}
         for item in render_objects:
@@ -1392,13 +1410,14 @@ def _attach_reference_render_sections(
                 "entry_y_offset": round(section_entry, 2),
                 "exit_y_offset": round(current_exit, 2),
                 "entry_speed": target_speed,
+                "route_anchors": [round(value, 2) for value in route_anchors],
                 "source_chunk_ids": reference_ids,
                 "source_levels": source_levels,
                 "objects": render_objects,
             }
         )
 
-    plan["render_strategy"] = "human_microchunk_adaptation_v3"
+    plan["render_strategy"] = "human_contiguous_pairs_v4"
     plan["render_sections"] = render_sections
     return plan
 
@@ -1573,7 +1592,7 @@ def build_or_refresh_reference_library(
     cache_path.write_text(
         json.dumps(
             {
-                "schema_version": 4,
+                "schema_version": 6,
                 "source_signature": source_signature,
                 "source_level_count": len(levels),
                 "source_file_count": len(aligned_files),
