@@ -39,15 +39,23 @@ def test_reference_chunks_are_mode_aware_and_retrievable() -> None:
         },
         "objects": [
             _object(0.0, "solid", "cube"),
+            _object(0.25, "solid", "cube"),
             _object(0.5, "hazard", "cube", object_id=8),
+            _object(0.75, "solid", "cube"),
             _object(1.0, "solid", "cube", y=135.0),
+            _object(1.25, "solid", "cube", y=135.0),
             _object(1.5, "orb", "cube", y=195.0, object_id=36),
+            _object(1.75, "solid", "cube", y=165.0),
             _object(2.0, "solid", "cube", y=165.0),
             _object(2.5, "hazard", "cube", y=165.0, object_id=8),
             _object(4.0, "solid", "wave"),
+            _object(4.25, "solid", "wave", y=225.0),
             _object(4.5, "hazard", "wave", y=255.0, object_id=8),
+            _object(4.75, "solid", "wave", y=270.0),
             _object(5.0, "solid", "wave", y=285.0),
+            _object(5.25, "solid", "wave", y=300.0),
             _object(5.5, "hazard", "wave", y=315.0, object_id=8),
+            _object(5.75, "solid", "wave", y=330.0),
             _object(6.0, "solid", "wave", y=345.0),
         ],
     }
@@ -61,11 +69,7 @@ def test_reference_chunks_are_mode_aware_and_retrievable() -> None:
         ],
     }
 
-    chunks = extract_reference_chunks(
-        [hard_demon, unknown],
-        chunk_beats=4.0,
-        stride_beats=2.0,
-    )
+    chunks = extract_reference_chunks([hard_demon, unknown])
 
     assert any(chunk["mode"] == "cube" for chunk in chunks)
     assert any(chunk["mode"] == "wave" for chunk in chunks)
