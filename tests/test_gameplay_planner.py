@@ -85,6 +85,13 @@ def test_reference_chunks_are_mode_aware_and_retrievable() -> None:
     assert references[0]["level"] == "Human Hard Demon"
     assert all(reference["mode"] == "cube" for reference in references)
     assert references[0]["events"]
+    assert references[0]["geometry_cells"]
+    assert "entry_y_step" in references[0]
+    assert "exit_y_step" in references[0]
+    assert any(
+        cell["category"] == "solid"
+        for cell in references[0]["geometry_cells"]
+    )
 
 
 def test_reference_extraction_rejects_invalid_window_sizes() -> None:
