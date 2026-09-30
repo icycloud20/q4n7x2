@@ -607,7 +607,7 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto cachePath = cacheDirectory / "human-chunks-v4.json";
+        auto cachePath = cacheDirectory / "human-chunks-v6.json";
         auto stem = exportStem(level);
         auto planPath = planDirectory / (stem + "-plan.json");
         auto logPath = planDirectory / (stem + "-plan.log");
