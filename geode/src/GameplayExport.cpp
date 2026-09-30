@@ -184,6 +184,20 @@ std::string levelDifficultyLabel(GJGameLevel* level) {
     return "Unknown";
 }
 
+std::string trainingDifficultyLabel(GJGameLevel* level) {
+    auto overrideValue =
+        Mod::get()->getSettingValue<std::string>("training-difficulty-override");
+
+    if (
+        !overrideValue.empty()
+        && overrideValue != "Auto from level"
+    ) {
+        return overrideValue;
+    }
+
+    return levelDifficultyLabel(level);
+}
+
 std::string modifierNameForID(int objectID) {
     switch (objectID) {
         case 200: return "speed_slow";
@@ -370,7 +384,12 @@ GameplayExportResult exportGameplayTimeline(
     levelJson["is_demon"] = level->m_demon.value() > 0;
     levelJson["demon_difficulty"] = level->m_demonDifficulty;
     levelJson["difficulty_enum"] = static_cast<int>(level->m_difficulty);
-    levelJson["difficulty_label"] = levelDifficultyLabel(level);
+    levelJson["difficulty_label"] = trainingDifficultyLabel(level);
+    levelJson["difficulty_label_source"] =
+        Mod::get()->getSettingValue<std::string>("training-difficulty-override")
+            == "Auto from level"
+        ? "level_metadata"
+        : "manual_override";
     root["level"] = levelJson;
 
     auto summary = matjson::Value::object();
