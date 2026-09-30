@@ -442,15 +442,18 @@ class $modify(GDAIEditorUI, EditorUI) {
             : std::string("Learned structure: <cr>fallback only</c>");
 
         FLAlertLayer::create(
-            "Gameplay Planner v3",
+            "Gameplay Planner v3.2",
             fmt::format(
-                "Created <cg>{}</c> objects across <cy>{}</c> main beats.<br>"
+                "Target: <cr>{}</c> ({:.0f}%).\n"
+                "Created <cg>{}</c> objects across <cy>{}</c> main beats.\n"
                 "Built <co>{}</c> structural objects and <co>{}</c> gameplay interactions "
-                "across <cy>{}</c> chunks.<br>"
-                "Planned <cg>{}</c> mode sections with <cy>{}</c> form transitions.<br><br>"
-                "{}<br>"
-                "Phrase/rhythm prior: <cy>{}</c> cube phrases.<br><br>"
-                "Modes currently planned: cube, ship, ball, UFO, wave.",
+                "across <cy>{}</c> chunks.\n"
+                "Planned <cg>{}</c> mode sections with <cy>{}</c> form transitions.\n\n"
+                "{}\n"
+                "Phrase/rhythm prior: <cy>{}</c> cube phrases.\n"
+                "Modes: cube, ship, ball, UFO, wave.",
+                generation.targetDifficulty,
+                generation.targetDifficultyScore * 100.0,
                 generation.createdObjects,
                 generation.usedBeats,
                 generation.structuredBlocks,
