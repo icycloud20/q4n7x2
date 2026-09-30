@@ -321,7 +321,7 @@ def extract_reference_chunks(
                     stable_mode,
                     stable_gravity,
                     stable_mini,
-                    stable_speed,
+                    _stable_speed,
                     stable_dual,
                     stable_mirror,
                 ) = state_signature
@@ -1071,14 +1071,14 @@ def _validate_layout_plan(
         first_reference = references_by_id.get(reference_pair[0])
         second_reference = references_by_id.get(reference_pair[1])
         if not isinstance(first_reference, dict) or not isinstance(second_reference, dict):
-            raise RuntimeError(
+            raise TypeError(
                 f"Section {expected_index} is missing human reference data"
             )
 
         first_entry = first_reference.get("entry")
         second_entry = second_reference.get("entry")
         if not isinstance(first_entry, dict) or not isinstance(second_entry, dict):
-            raise RuntimeError(
+            raise TypeError(
                 f"Section {expected_index} has incomplete reference state"
             )
         if first_entry.get("speed") != second_entry.get("speed"):
