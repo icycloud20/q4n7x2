@@ -264,7 +264,14 @@ def extract_reference_chunks(
                     for item in mode_objects
                     if (y := _finite_number(item.get("y"))) is not None
                 ]
-                anchor_y = float(median(all_y)) if all_y else 0.0
+                solid_y = [
+                    y
+                    for item in mode_objects
+                    if item.get("category") == "solid"
+                    if (y := _finite_number(item.get("y"))) is not None
+                ]
+                anchor_source = solid_y if solid_y else all_y
+                anchor_y = float(median(anchor_source)) if anchor_source else 0.0
 
                 events: list[dict[str, Any]] = []
                 for item in interactions[:24]:
