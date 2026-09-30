@@ -700,6 +700,7 @@ LlmGenerationResult generateLlmLayout(
                 section.mode == "cube" ? 690.0f : 630.0f
             );
 
+            ++result.humanReferenceSections;
             ++result.sections;
             continue;
         }
