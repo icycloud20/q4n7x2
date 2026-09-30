@@ -33,11 +33,22 @@ struct PlannedAction {
     double intensity = 0.8;
 };
 
+struct ReferenceRenderObject {
+    double beat = 0.0;
+    int yStep = 0;
+    int objectID = 0;
+    float rotation = 0.0f;
+    std::string category;
+};
+
 struct PlannedSection {
     std::size_t index = 0;
     std::string mode = "cube";
     double intensity = 0.8;
+    int entryYStep = 0;
+    int exitYStep = 0;
     std::vector<PlannedAction> actions;
+    std::vector<ReferenceRenderObject> renderObjects;
 };
 
 struct RoutePoint {
@@ -215,6 +226,105 @@ std::vector<PlannedSection> readPlan(
             return left.index < right.index;
         }
     );
+
+    auto renderSectionsResult = plan["render_sections"].asArray();
+    if (renderSectionsResult.isOk()) {
+        for (auto const& renderSectionValue : renderSectionsResult.unwrap()) {
+            auto index = static_cast<std::size_t>(
+                std::max(
+                    0.0,
+                    renderSectionValue["index"].asDouble().unwrapOr(0.0)
+                )
+            );
+
+            auto section = std::find_if(
+                sections.begin(),
+                sections.end(),
+                [index](PlannedSection const& candidate) {
+                    return candidate.index == index;
+                }
+            );
+            if (section == sections.end()) {
+                continue;
+            }
+
+            section->entryYStep = std::clamp(
+                static_cast<int>(
+                    renderSectionValue["entry_y_step"]
+                        .asDouble()
+                        .unwrapOr(0.0)
+                ),
+                -48,
+                48
+            );
+            section->exitYStep = std::clamp(
+                static_cast<int>(
+                    renderSectionValue["exit_y_step"]
+                        .asDouble()
+                        .unwrapOr(0.0)
+                ),
+                -48,
+                48
+            );
+
+            auto objectsResult = renderSectionValue["objects"].asArray();
+            if (!objectsResult.isOk()) {
+                continue;
+            }
+
+            for (auto const& objectValue : objectsResult.unwrap()) {
+                ReferenceRenderObject object;
+                object.beat = std::clamp(
+                    objectValue["beat"].asDouble().unwrapOr(0.0),
+                    0.0,
+                    8.0
+                );
+                object.yStep = std::clamp(
+                    static_cast<int>(
+                        objectValue["y_step"].asDouble().unwrapOr(0.0)
+                    ),
+                    -64,
+                    64
+                );
+                object.objectID = std::max(
+                    0,
+                    static_cast<int>(
+                        objectValue["object_id"].asDouble().unwrapOr(0.0)
+                    )
+                );
+                object.rotation = static_cast<float>(
+                    objectValue["rotation"].asDouble().unwrapOr(0.0)
+                );
+                object.category =
+                    objectValue["category"].asString().unwrapOr("");
+
+                if (
+                    object.objectID <= 0
+                    || (
+                        object.category != "solid"
+                        && object.category != "hazard"
+                        && object.category != "orb"
+                        && object.category != "pad"
+                    )
+                ) {
+                    continue;
+                }
+
+                section->renderObjects.push_back(std::move(object));
+            }
+
+            std::sort(
+                section->renderObjects.begin(),
+                section->renderObjects.end(),
+                [](ReferenceRenderObject const& left, ReferenceRenderObject const& right) {
+                    if (left.beat != right.beat) {
+                        return left.beat < right.beat;
+                    }
+                    return left.yStep < right.yStep;
+                }
+            );
+        }
+    }
 
     return sections;
 }
@@ -405,6 +515,52 @@ LlmGenerationResult generateLlmLayout(
         return true;
     };
 
+    auto addReferenceObject = [&](
+        int objectID,
+        std::string const& category,
+        float x,
+        float y,
+        float rotation
+    ) {
+        if (objectID <= 0) {
+            return false;
+        }
+
+        CCPoint position = snap({
+            x,
+            std::clamp(y, kGroundY, kMaximumY),
+        });
+
+        auto xKey = static_cast<int>(std::round(position.x));
+        auto yKey = static_cast<int>(std::round(position.y));
+
+        if (category == "solid") {
+            auto blockKey = std::make_pair(xKey, yKey);
+            if (!placedBlocks.insert(blockKey).second) {
+                return false;
+            }
+        } else {
+            auto actionKey = std::make_tuple(objectID, xKey, yKey);
+            if (!placedActions.insert(actionKey).second) {
+                return false;
+            }
+        }
+
+        auto* object = editorLayer->createObject(objectID, position, true);
+        if (!object) {
+            return false;
+        }
+
+        object->setRotation(rotation);
+        ++result.createdObjects;
+
+        if (category != "solid") {
+            ++result.gameplayEvents;
+        }
+
+        return true;
+    };
+
     auto addPlatform = [&](float centerX, float blockY, int width) {
         width = std::clamp(width, 2, 5);
         float startX = centerX - static_cast<float>(width - 1) * 15.0f;
@@ -462,14 +618,90 @@ LlmGenerationResult generateLlmLayout(
             continue;
         }
 
+        bool hasReferenceGeometry = !section.renderObjects.empty();
+        float referenceBaseY = pathY;
+        float referenceEntryPathY = pathY;
+
+        if (hasReferenceGeometry) {
+            int minimumStep = section.renderObjects.front().yStep;
+            int maximumStep = section.renderObjects.front().yStep;
+
+            for (auto const& object : section.renderObjects) {
+                minimumStep = std::min(minimumStep, object.yStep);
+                maximumStep = std::max(maximumStep, object.yStep);
+            }
+
+            float playerSurfaceOffset =
+                section.mode == "cube" ? 30.0f : 0.0f;
+
+            referenceBaseY =
+                pathY
+                - playerSurfaceOffset
+                - static_cast<float>(section.entryYStep * 15);
+
+            float minimumY =
+                referenceBaseY + static_cast<float>(minimumStep * 15);
+            float maximumY =
+                referenceBaseY + static_cast<float>(maximumStep * 15);
+
+            if (minimumY < kGroundY) {
+                referenceBaseY += kGroundY - minimumY;
+            }
+            maximumY =
+                referenceBaseY + static_cast<float>(maximumStep * 15);
+            if (maximumY > kMaximumY) {
+                referenceBaseY -= maximumY - kMaximumY;
+            }
+
+            referenceEntryPathY =
+                referenceBaseY
+                + static_cast<float>(section.entryYStep * 15)
+                + playerSurfaceOffset;
+        }
+
         if (section.mode != currentMode) {
             addActionObject(
                 portalObjectID(section.mode),
                 sectionStartX,
-                std::clamp(pathY, 135.0f, 690.0f)
+                std::clamp(
+                    hasReferenceGeometry ? referenceEntryPathY : pathY,
+                    135.0f,
+                    690.0f
+                )
             );
             currentMode = section.mode;
             ++result.modeTransitions;
+        }
+
+        if (hasReferenceGeometry) {
+            for (auto const& object : section.renderObjects) {
+                float x =
+                    positionForSectionBeat(section.index, object.beat).x;
+                float y =
+                    referenceBaseY
+                    + static_cast<float>(object.yStep * 15);
+
+                addReferenceObject(
+                    object.objectID,
+                    object.category,
+                    x,
+                    y,
+                    object.rotation
+                );
+            }
+
+            float playerSurfaceOffset =
+                section.mode == "cube" ? 30.0f : 0.0f;
+            pathY = std::clamp(
+                referenceBaseY
+                    + static_cast<float>(section.exitYStep * 15)
+                    + playerSurfaceOffset,
+                section.mode == "cube" ? 135.0f : 180.0f,
+                section.mode == "cube" ? 690.0f : 630.0f
+            );
+
+            ++result.sections;
+            continue;
         }
 
         if (section.mode == "cube") {
