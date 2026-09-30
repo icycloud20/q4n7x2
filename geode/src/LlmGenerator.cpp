@@ -35,9 +35,11 @@ struct PlannedAction {
 
 struct ReferenceRenderObject {
     double beat = 0.0;
-    int yStep = 0;
+    float relativeY = 0.0f;
     int objectID = 0;
     float rotation = 0.0f;
+    float scaleX = 1.0f;
+    float scaleY = 1.0f;
     std::string category;
 };
 
@@ -45,8 +47,9 @@ struct PlannedSection {
     std::size_t index = 0;
     std::string mode = "cube";
     double intensity = 0.8;
-    int entryYStep = 0;
-    int exitYStep = 0;
+    float entryYOffset = 0.0f;
+    float exitYOffset = 0.0f;
+    std::string entrySpeed = "normal";
     std::vector<PlannedAction> actions;
     std::vector<ReferenceRenderObject> renderObjects;
 };
@@ -248,24 +251,38 @@ std::vector<PlannedSection> readPlan(
                 continue;
             }
 
-            section->entryYStep = std::clamp(
-                static_cast<int>(
-                    renderSectionValue["entry_y_step"]
+            section->entryYOffset = static_cast<float>(
+                std::clamp(
+                    renderSectionValue["entry_y_offset"]
                         .asDouble()
-                        .unwrapOr(0.0)
-                ),
-                -48,
-                48
+                        .unwrapOr(
+                            renderSectionValue["entry_y_step"]
+                                .asDouble()
+                                .unwrapOr(0.0)
+                            * 15.0
+                        ),
+                    -720.0,
+                    720.0
+                )
             );
-            section->exitYStep = std::clamp(
-                static_cast<int>(
-                    renderSectionValue["exit_y_step"]
+            section->exitYOffset = static_cast<float>(
+                std::clamp(
+                    renderSectionValue["exit_y_offset"]
                         .asDouble()
-                        .unwrapOr(0.0)
-                ),
-                -48,
-                48
+                        .unwrapOr(
+                            renderSectionValue["exit_y_step"]
+                                .asDouble()
+                                .unwrapOr(0.0)
+                            * 15.0
+                        ),
+                    -720.0,
+                    720.0
+                )
             );
+            section->entrySpeed =
+                renderSectionValue["entry_speed"]
+                    .asString()
+                    .unwrapOr("normal");
 
             auto objectsResult = renderSectionValue["objects"].asArray();
             if (!objectsResult.isOk()) {
@@ -279,12 +296,19 @@ std::vector<PlannedSection> readPlan(
                     0.0,
                     8.0
                 );
-                object.yStep = std::clamp(
-                    static_cast<int>(
-                        objectValue["y_step"].asDouble().unwrapOr(0.0)
-                    ),
-                    -64,
-                    64
+                object.relativeY = static_cast<float>(
+                    std::clamp(
+                        objectValue["relative_y"]
+                            .asDouble()
+                            .unwrapOr(
+                                objectValue["y_step"]
+                                    .asDouble()
+                                    .unwrapOr(0.0)
+                                * 15.0
+                            ),
+                        -960.0,
+                        960.0
+                    )
                 );
                 object.objectID = std::max(
                     0,
@@ -294,6 +318,20 @@ std::vector<PlannedSection> readPlan(
                 );
                 object.rotation = static_cast<float>(
                     objectValue["rotation"].asDouble().unwrapOr(0.0)
+                );
+                object.scaleX = static_cast<float>(
+                    std::clamp(
+                        objectValue["scale_x"].asDouble().unwrapOr(1.0),
+                        0.1,
+                        8.0
+                    )
+                );
+                object.scaleY = static_cast<float>(
+                    std::clamp(
+                        objectValue["scale_y"].asDouble().unwrapOr(1.0),
+                        0.1,
+                        8.0
+                    )
                 );
                 object.category =
                     objectValue["category"].asString().unwrapOr("");
@@ -320,7 +358,7 @@ std::vector<PlannedSection> readPlan(
                     if (left.beat != right.beat) {
                         return left.beat < right.beat;
                     }
-                    return left.yStep < right.yStep;
+                    return left.relativeY < right.relativeY;
                 }
             );
         }
@@ -520,16 +558,20 @@ LlmGenerationResult generateLlmLayout(
         std::string const& category,
         float x,
         float y,
-        float rotation
+        float rotation,
+        float scaleX,
+        float scaleY
     ) {
         if (objectID <= 0) {
             return false;
         }
 
-        CCPoint position = snap({
+        // Human-reference geometry keeps its sub-grid positions. Snapping
+        // this back to 15 units destroyed original jump/orb relationships.
+        CCPoint position = {
             x,
             std::clamp(y, kGroundY, kMaximumY),
-        });
+        };
 
         auto xKey = static_cast<int>(std::round(position.x));
         auto yKey = static_cast<int>(std::round(position.y));
@@ -552,6 +594,8 @@ LlmGenerationResult generateLlmLayout(
         }
 
         object->setRotation(rotation);
+        object->setScaleX(scaleX);
+        object->setScaleY(scaleY);
         ++result.createdObjects;
 
         if (category != "solid") {
@@ -623,12 +667,12 @@ LlmGenerationResult generateLlmLayout(
         float referenceEntryPathY = pathY;
 
         if (hasReferenceGeometry) {
-            int minimumStep = section.renderObjects.front().yStep;
-            int maximumStep = section.renderObjects.front().yStep;
+            float minimumOffset = section.renderObjects.front().relativeY;
+            float maximumOffset = section.renderObjects.front().relativeY;
 
             for (auto const& object : section.renderObjects) {
-                minimumStep = std::min(minimumStep, object.yStep);
-                maximumStep = std::max(maximumStep, object.yStep);
+                minimumOffset = std::min(minimumOffset, object.relativeY);
+                maximumOffset = std::max(maximumOffset, object.relativeY);
             }
 
             float playerSurfaceOffset =
@@ -637,25 +681,23 @@ LlmGenerationResult generateLlmLayout(
             referenceBaseY =
                 pathY
                 - playerSurfaceOffset
-                - static_cast<float>(section.entryYStep * 15);
+                - section.entryYOffset;
 
-            float minimumY =
-                referenceBaseY + static_cast<float>(minimumStep * 15);
-            float maximumY =
-                referenceBaseY + static_cast<float>(maximumStep * 15);
+            float minimumY = referenceBaseY + minimumOffset;
+            float maximumY = referenceBaseY + maximumOffset;
 
             if (minimumY < kGroundY) {
                 referenceBaseY += kGroundY - minimumY;
             }
-            maximumY =
-                referenceBaseY + static_cast<float>(maximumStep * 15);
+
+            maximumY = referenceBaseY + maximumOffset;
             if (maximumY > kMaximumY) {
                 referenceBaseY -= maximumY - kMaximumY;
             }
 
             referenceEntryPathY =
                 referenceBaseY
-                + static_cast<float>(section.entryYStep * 15)
+                + section.entryYOffset
                 + playerSurfaceOffset;
         }
 
@@ -678,15 +720,16 @@ LlmGenerationResult generateLlmLayout(
                 float x =
                     positionForSectionBeat(section.index, object.beat).x;
                 float y =
-                    referenceBaseY
-                    + static_cast<float>(object.yStep * 15);
+                    referenceBaseY + object.relativeY;
 
                 addReferenceObject(
                     object.objectID,
                     object.category,
                     x,
                     y,
-                    object.rotation
+                    object.rotation,
+                    object.scaleX,
+                    object.scaleY
                 );
             }
 
@@ -694,7 +737,7 @@ LlmGenerationResult generateLlmLayout(
                 section.mode == "cube" ? 30.0f : 0.0f;
             pathY = std::clamp(
                 referenceBaseY
-                    + static_cast<float>(section.exitYStep * 15)
+                    + section.exitYOffset
                     + playerSurfaceOffset,
                 section.mode == "cube" ? 135.0f : 180.0f,
                 section.mode == "cube" ? 690.0f : 630.0f
