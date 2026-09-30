@@ -472,6 +472,21 @@ class $modify(GDAIEditorUI, EditorUI) {
         bool useLlm =
             Mod::get()->getSettingValue<bool>("llm-planner-enabled");
 
+        if (
+            useLlm
+            && editorLayer->m_objects
+            && editorLayer->m_objects->count() > 250
+        ) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Use an Empty Test Level",
+                "Clear the existing generated gameplay before calling Luna. "
+                "This check happens before the API request so no credits are wasted.",
+                "OK"
+            )->show();
+            return;
+        }
+
         if (!useLlm) {
             auto generation = generateBaselineLayout(editorLayer, analysisPath);
             finishEarly();
