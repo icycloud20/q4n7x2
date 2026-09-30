@@ -91,6 +91,22 @@ std::string makeSongKey(GJGameLevel* level) {
     return "official-" + std::to_string(level->m_audioTrack);
 }
 
+std::string speedName(Speed speed) {
+    switch (speed) {
+        case Speed::Slow:
+            return "slow";
+        case Speed::Fast:
+            return "fast";
+        case Speed::Faster:
+            return "faster";
+        case Speed::Fastest:
+            return "fastest";
+        case Speed::Normal:
+        default:
+            return "normal";
+    }
+}
+
 std::string makeFileSignature(std::filesystem::path const& path) {
     std::error_code error;
 
@@ -284,7 +300,8 @@ int runLlmPlanProcess(
     std::string const& difficulty,
     std::string const& model,
     std::string const& reasoningEffort,
-    double songOffset
+    double songOffset,
+    std::string const& entrySpeed
 ) {
     return runWindowsCommand(
         {
@@ -301,6 +318,8 @@ int runLlmPlanProcess(
             std::filesystem::path(difficulty).wstring(),
             L"--song-offset",
             std::filesystem::path(fmt::format("{:.6f}", songOffset)).wstring(),
+            L"--entry-speed",
+            std::filesystem::path(entrySpeed).wstring(),
             L"--model",
             std::filesystem::path(model).wstring(),
             L"--reasoning-effort",
@@ -588,7 +607,7 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto cachePath = cacheDirectory / "human-chunks-v2.json";
+        auto cachePath = cacheDirectory / "human-chunks-v3.json";
         auto stem = exportStem(level);
         auto planPath = planDirectory / (stem + "-plan.json");
         auto logPath = planDirectory / (stem + "-plan.log");
@@ -599,6 +618,7 @@ class $modify(GDAIEditorUI, EditorUI) {
         auto reasoningEffort =
             Mod::get()->getSettingValue<std::string>("planner-reasoning-effort");
         double songOffset = editorLayer->m_levelSettings->m_songOffset;
+        auto entrySpeed = speedName(editorLayer->m_levelSettings->m_startSpeed);
 
         showNotification(
             "GPT-6 Luna is planning gameplay from your training levels...",
@@ -619,7 +639,8 @@ class $modify(GDAIEditorUI, EditorUI) {
             difficulty,
             model,
             reasoningEffort,
-            songOffset
+            songOffset,
+            entrySpeed
         ] {
             {
                 std::ofstream logFile(logPath, std::ios::out | std::ios::trunc);
@@ -629,6 +650,7 @@ class $modify(GDAIEditorUI, EditorUI) {
                         << "Model: " << model << "\n"
                         << "Reasoning: " << reasoningEffort << "\n"
                         << "Difficulty: " << difficulty << "\n"
+                        << "Entry speed: " << entrySpeed << "\n"
                         << "Training directory: " << trainingDirectory.string() << "\n"
                         << "Reference cache: " << cachePath.string() << "\n"
                         << "Plan output: " << planPath.string() << "\n\n";
@@ -646,7 +668,8 @@ class $modify(GDAIEditorUI, EditorUI) {
                 difficulty,
                 model,
                 reasoningEffort,
-                songOffset
+                songOffset,
+                entrySpeed
             );
 #else
             int exitCode = -1;
