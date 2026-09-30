@@ -584,8 +584,31 @@ def extract_reference_chunks(
                         "events": events,
                         "solid_profile": solid_profile[:16],
                         "geometry_cells": geometry_cells,
+                        "source_anchor_y": round(anchor_y, 2),
                         "entry_y_offset": entry_y_offset,
                         "exit_y_offset": exit_y_offset,
+                        "safe_entry": (
+                            not any(
+                                item["category"] == "hazard"
+                                and float(item["beat_offset"]) <= 0.18
+                                for item in geometry_cells
+                            )
+                            and (
+                                mode != "cube"
+                                or sum(
+                                    1
+                                    for item in geometry_cells
+                                    if item["category"] == "solid"
+                                    and float(item["beat_offset"]) <= 0.30
+                                    and abs(float(item["relative_y"]) - entry_y_offset) <= 45.0
+                                ) >= 2
+                            )
+                        ),
+                        "safe_exit": not any(
+                            item["category"] == "hazard"
+                            and float(item["beat_offset"]) >= chunk_beats - 0.18
+                            for item in geometry_cells
+                        ),
                         "vertical_span": round(vertical_span, 2),
                         "source_seconds_per_beat": source_seconds_per_beat,
                         "transplant_safe": True,
