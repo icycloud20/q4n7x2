@@ -534,7 +534,7 @@ LlmGenerationResult generateLlmLayout(
         auto xKey = static_cast<int>(std::round(position.x));
         auto yKey = static_cast<int>(std::round(position.y));
 
-        if (category == "solid") {
+        if (category == "solid" && objectID == 1) {
             auto blockKey = std::make_pair(xKey, yKey);
             if (!placedBlocks.insert(blockKey).second) {
                 return false;
