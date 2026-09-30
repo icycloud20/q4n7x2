@@ -188,6 +188,11 @@ def _build_parser() -> argparse.ArgumentParser:
     layout_parser.add_argument("--out", type=Path, required=True)
     layout_parser.add_argument("--difficulty", default="Hard Demon")
     layout_parser.add_argument("--song-offset", type=float, default=0.0)
+    layout_parser.add_argument(
+        "--entry-speed",
+        choices=("slow", "normal", "fast", "faster", "fastest"),
+        default="normal",
+    )
     layout_parser.add_argument("--model", default="gpt-6-luna")
     layout_parser.add_argument("--reasoning-effort", default="low")
     layout_parser.add_argument(
@@ -335,11 +340,13 @@ def main() -> None:
                 model=arguments.model,
                 reasoning_effort=arguments.reasoning_effort,
                 song_offset=arguments.song_offset,
+                entry_speed=arguments.entry_speed,
             )
             payload = {
                 "planner": "openai",
                 "model": arguments.model,
                 "difficulty": arguments.difficulty,
+                "entry_speed": arguments.entry_speed,
                 "reference_chunks": len(chunks),
                 "plan": plan,
             }
