@@ -424,6 +424,35 @@ def build_planner_prompt(
     )
 
 
+def _read_openai_api_key() -> str:
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if key:
+        return key
+
+    # Windows child processes inherit their parent's environment. If Steam was
+    # already running when OPENAI_API_KEY was added, GD may not inherit it even
+    # though Windows has saved it correctly. Read the persisted user variable
+    # directly as a fallback.
+    if os.name == "nt":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                "Environment",
+                0,
+                winreg.KEY_READ,
+            ) as key_handle:
+                value, _ = winreg.QueryValueEx(key_handle, "OPENAI_API_KEY")
+
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        except (FileNotFoundError, OSError):
+            pass
+
+    return ""
+
+
 def _extract_response_text(payload: dict[str, Any]) -> str:
     for output_item in payload.get("output", []):
         if not isinstance(output_item, dict):
@@ -449,10 +478,10 @@ def request_openai_plan(
     reasoning_effort: str = "low",
     timeout_seconds: float = 45.0,
 ) -> dict[str, Any]:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    api_key = _read_openai_api_key()
     if not api_key:
         raise RuntimeError(
-            "OPENAI_API_KEY is not set. Set it in your environment before using the LLM planner."
+            "OPENAI_API_KEY is not available in the process environment or Windows user variables."
         )
 
     body = {
@@ -737,10 +766,10 @@ def request_openai_layout(
     song_offset: float = 0.0,
     timeout_seconds: float = 90.0,
 ) -> dict[str, Any]:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    api_key = _read_openai_api_key()
     if not api_key:
         raise RuntimeError(
-            "OPENAI_API_KEY is not set. Set it in your environment before using the LLM planner."
+            "OPENAI_API_KEY is not available in the process environment or Windows user variables."
         )
 
     prompt, expected_sections = build_layout_prompt(
