@@ -625,9 +625,10 @@ def build_layout_prompt(
         "do not rotate through them mechanically. Avoid repeating the same concept "
         "or evenly-spaced obstacle rhythm in adjacent sections. Every orb or pad "
         "must be route-required; optional interactions are forbidden. "
-        "Cube actions may use jump/land and required orbs/pads. Ship uses hold and "
-        "release timing. Ball uses gravity_flip and land intent. UFO uses ufo_click. "
-        "Wave uses wave_hold and wave_release. A section may start with mode_portal "
+        "Cube actions may use jump/land plus required yellow/pink orbs/pads; do not "
+        "use blue/green orbs in this v1 compiler. Ship uses hold and release timing. "
+        "Ball uses gravity_flip. UFO uses ufo_click. Wave uses wave_hold and wave_release. "
+        "A section may start with mode_portal "
         "when its mode differs from the previous section. Keep action beat values "
         "between 0 and 8. height_delta is in 30-unit gameplay steps, relative to "
         "the current route, not an absolute coordinate. Use human references as "
@@ -639,6 +640,92 @@ def build_layout_prompt(
     )
 
     return prompt, len(sections)
+
+
+def _validate_layout_plan(plan: dict[str, Any], expected_sections: int) -> None:
+    sections = plan.get("sections")
+    if not isinstance(sections, list) or len(sections) != expected_sections:
+        raise RuntimeError(
+            "Planner returned the wrong number of sections: "
+            f"expected {expected_sections}, got "
+            f"{len(sections) if isinstance(sections, list) else 0}"
+        )
+
+    allowed_by_mode = {
+        "cube": {
+            "jump",
+            "land",
+            "orb_yellow",
+            "orb_pink",
+            "pad_yellow",
+            "pad_pink",
+            "mode_portal",
+        },
+        "ship": {"hold", "release", "mode_portal"},
+        "ball": {"gravity_flip", "mode_portal"},
+        "ufo": {"ufo_click", "mode_portal"},
+        "wave": {"wave_hold", "wave_release", "mode_portal"},
+    }
+    minimum_primary_actions = {
+        "cube": 4,
+        "ship": 4,
+        "ball": 4,
+        "ufo": 4,
+        "wave": 5,
+    }
+
+    for expected_index, section in enumerate(sections):
+        if not isinstance(section, dict) or section.get("index") != expected_index:
+            raise RuntimeError("Planner returned sections out of order")
+
+        mode = str(section.get("mode", ""))
+        if mode not in allowed_by_mode:
+            raise RuntimeError(f"Planner returned unsupported mode {mode!r}")
+
+        actions = section.get("actions")
+        if not isinstance(actions, list):
+            raise RuntimeError(f"Section {expected_index} has no action list")
+
+        primary_actions = 0
+        previous_beat = -1.0
+
+        for action in actions:
+            if not isinstance(action, dict):
+                raise RuntimeError(f"Section {expected_index} contains an invalid action")
+
+            action_name = str(action.get("action", ""))
+            beat = _finite_number(action.get("beat"))
+            if beat is None or beat < 0.0 or beat > 8.0:
+                raise RuntimeError(
+                    f"Section {expected_index} has an action outside its 8-beat window"
+                )
+
+            if beat < previous_beat:
+                raise RuntimeError(f"Section {expected_index} actions are not time-ordered")
+            previous_beat = beat
+
+            if action_name not in allowed_by_mode[mode]:
+                raise RuntimeError(
+                    f"Section {expected_index} ({mode}) contains incompatible "
+                    f"action {action_name!r}"
+                )
+
+            if action_name != "mode_portal":
+                primary_actions += 1
+
+            if (
+                action_name.startswith("orb_")
+                or action_name.startswith("pad_")
+            ) and not bool(action.get("required", False)):
+                raise RuntimeError(
+                    f"Section {expected_index} contains an optional orb/pad"
+                )
+
+        if primary_actions < minimum_primary_actions[mode]:
+            raise RuntimeError(
+                f"Section {expected_index} ({mode}) is too sparse: "
+                f"{primary_actions} primary actions"
+            )
 
 
 def request_openai_layout(
@@ -699,18 +786,7 @@ def request_openai_layout(
         raise RuntimeError(f"Could not reach the OpenAI API: {exc.reason}") from exc
 
     plan = json.loads(_extract_response_text(payload))
-    sections = plan.get("sections")
-    if not isinstance(sections, list) or len(sections) != expected_sections:
-        raise RuntimeError(
-            "Planner returned the wrong number of sections: "
-            f"expected {expected_sections}, got "
-            f"{len(sections) if isinstance(sections, list) else 0}"
-        )
-
-    for expected_index, section in enumerate(sections):
-        if not isinstance(section, dict) or section.get("index") != expected_index:
-            raise RuntimeError("Planner returned sections out of order")
-
+    _validate_layout_plan(plan, expected_sections)
     return plan
 
 
