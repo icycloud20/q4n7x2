@@ -13,6 +13,7 @@ struct LlmGenerationResult {
     std::size_t gameplayEvents = 0;
     std::size_t sections = 0;
     std::size_t modeTransitions = 0;
+    std::size_t humanReferenceSections = 0;
 };
 
 LlmGenerationResult generateLlmLayout(
