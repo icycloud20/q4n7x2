@@ -188,7 +188,12 @@ def main() -> None:
         print(f"Wrote {output}")
         print(f"Source levels: {profile['source_level_count']}")
         print(f"Cube phrases: {profile['cube_phrase_count']}")
-        print(f"Template weights: {profile['template_weights']}")
+        print(f"Difficulty distribution: {profile.get('difficulty_distribution', {})}")
+        for mode, mode_profile in profile.get("mode_profiles", {}).items():
+            print(
+                f"{mode}: {mode_profile.get('phrase_count', 0)} phrases / "
+                f"{mode_profile.get('interaction_object_count', 0)} interactions"
+            )
         return
 
     parser.error("Unknown command")
