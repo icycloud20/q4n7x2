@@ -53,6 +53,15 @@ struct LearnedProfile {
     std::size_t sourcePhrases = 0;
     int recommendedMaxEvents = 3;
     std::array<int, 5> recommendedEventsByMode = {4, 4, 4, 4, 4};
+    std::array<double, 5> modeWeights = {0.42, 0.15, 0.20, 0.15, 0.08};
+    std::array<std::array<double, 5>, 5> transitionWeights = {{
+        {{0.0, 0.25, 0.35, 0.30, 0.10}},
+        {{0.66, 0.0, 0.19, 0.02, 0.13}},
+        {{0.71, 0.11, 0.0, 0.14, 0.04}},
+        {{0.79, 0.04, 0.09, 0.0, 0.08}},
+        {{0.67, 0.22, 0.11, 0.0, 0.0}},
+    }};
+    int modeSectionChunks = 2;
     double denseSubdivisionWeight = 0.0;
 
     double hazardOrbPad = 0.48;
@@ -148,7 +157,8 @@ GameplayMode chooseGameplayModeForSection(
     double onset,
     GameplayMode previous,
     GameplayMode twoBack,
-    std::array<bool, 5> const& usedModes
+    std::array<bool, 5> const& usedModes,
+    LearnedProfile const& profile
 ) {
     if (sectionIndex == 0) {
         return GameplayMode::Cube;
@@ -192,6 +202,16 @@ GameplayMode chooseGameplayModeForSection(
 
     for (std::size_t index = 0; index < candidates.size(); ++index) {
         auto& candidate = candidates[index];
+        auto previousIndex = gameplayModeIndex(previous);
+
+        // The twelve-level retrain supplies two priors here: how often each
+        // mode appears at the target difficulty, and which transitions creators
+        // actually use. Song energy/onsets still influence the choice, but the
+        // order now resembles real Hard Demon mode flow instead of an arbitrary
+        // five-mode shuffle.
+        candidate.score += profile.modeWeights[index] * 0.75;
+        candidate.score +=
+            profile.transitionWeights[previousIndex][index] * 1.10;
 
         if (usedModes[gameplayModeIndex(candidate.mode)]) {
             // During each five-section cycle every gameplay mode must appear
@@ -556,6 +576,62 @@ LearnedProfile readLearnedProfile(std::string const& targetDifficulty) {
             2,
             12
         );
+    }
+
+    auto allSequence = root["mode_sequence_profile"];
+    auto difficultySequence =
+        root["difficulty_profiles"][targetDifficulty]["mode_sequence_profile"];
+
+    double sectionChunksValue =
+        difficultySequence["recommended_section_chunks"]
+            .asDouble()
+            .unwrapOr(
+                allSequence["recommended_section_chunks"]
+                    .asDouble()
+                    .unwrapOr(2.0)
+            );
+    profile.modeSectionChunks = std::clamp(
+        static_cast<int>(std::round(sectionChunksValue)),
+        1,
+        2
+    );
+
+    for (std::size_t index = 0; index < modeNames.size(); ++index) {
+        auto modeName = modeNames[index];
+
+        double overallWeight =
+            allSequence["mode_weights"][modeName]
+                .asDouble()
+                .unwrapOr(profile.modeWeights[index]);
+        double difficultyWeight =
+            difficultySequence["mode_weights"][modeName]
+                .asDouble()
+                .unwrapOr(0.0);
+
+        profile.modeWeights[index] =
+            difficultyWeight > 0.0 ? difficultyWeight : overallWeight;
+
+        for (std::size_t target = 0; target < modeNames.size(); ++target) {
+            if (target == index) {
+                profile.transitionWeights[index][target] = 0.0;
+                continue;
+            }
+
+            auto targetName = modeNames[target];
+            double overallTransition =
+                allSequence["transition_weights"][modeName][targetName]
+                    .asDouble()
+                    .unwrapOr(profile.transitionWeights[index][target]);
+            double difficultyTransition =
+                difficultySequence["transition_weights"][modeName][targetName]
+                    .asDouble()
+                    .unwrapOr(-1.0);
+
+            profile.transitionWeights[index][target] =
+                difficultyTransition >= 0.0
+                    ? difficultyTransition
+                    : overallTransition;
+        }
     }
 
     profile.hazardOrbPad =
@@ -1296,14 +1372,21 @@ BaselineGenerationResult generateBaselineLayout(
 
         bool modeChangedThisChunk = false;
 
-        // Modes are planned in 16-beat sections so a form has enough time to
-        // develop an actual gameplay identity instead of portal-spamming.
-        if (generatedMotifs % 2 == 0) {
+        // The retrained Hard Demon set changes modes much faster than the old
+        // hand-written 16-beat cadence. Its p75 section length is under four
+        // beats, so one eight-beat generator chunk is already conservative.
+        auto sectionChunks = static_cast<std::size_t>(
+            std::max(1, profile.modeSectionChunks)
+        );
+        if (generatedMotifs % sectionChunks == 0) {
             double sectionEnergy = 0.0;
             double sectionOnset = 0.0;
             std::size_t sectionCount = 0;
 
-            std::size_t sectionEnd = std::min(start + 16, beats.size());
+            std::size_t sectionEnd = std::min(
+                start + 8 * sectionChunks,
+                beats.size()
+            );
             for (std::size_t index = start; index < sectionEnd; ++index) {
                 sectionEnergy += beats[index].energy;
                 sectionOnset += beats[index].onset;
@@ -1315,7 +1398,7 @@ BaselineGenerationResult generateBaselineLayout(
                 sectionOnset /= static_cast<double>(sectionCount);
             }
 
-            std::size_t sectionIndex = generatedMotifs / 2;
+            std::size_t sectionIndex = generatedMotifs / sectionChunks;
 
             if (std::all_of(
                 usedModesInCycle.begin(),
@@ -1332,7 +1415,8 @@ BaselineGenerationResult generateBaselineLayout(
                 sectionOnset,
                 previousSectionMode,
                 twoBackSectionMode,
-                usedModesInCycle
+                usedModesInCycle,
+                profile
             );
             usedModesInCycle[gameplayModeIndex(desiredMode)] = true;
 
