@@ -52,6 +52,7 @@ struct LearnedProfile {
     std::size_t sourceLevels = 0;
     std::size_t sourcePhrases = 0;
     int recommendedMaxEvents = 3;
+    std::array<int, 5> recommendedEventsByMode = {4, 4, 4, 4, 4};
     double denseSubdivisionWeight = 0.0;
 
     double hazardOrbPad = 0.48;
@@ -79,6 +80,39 @@ enum class GameplayMode {
     Ufo = 3,
     Wave = 4,
 };
+
+struct DifficultyTarget {
+    std::string label = "Hard Demon";
+    double score = 0.80;
+};
+
+DifficultyTarget readDifficultyTarget() {
+    DifficultyTarget target;
+    target.label = Mod::get()->getSettingValue<std::string>("target-difficulty");
+
+    static std::array<std::pair<char const*, double>, 9> const values = {{
+        {"Normal", 0.20},
+        {"Hard", 0.30},
+        {"Harder", 0.40},
+        {"Insane", 0.50},
+        {"Easy Demon", 0.60},
+        {"Medium Demon", 0.70},
+        {"Hard Demon", 0.80},
+        {"Insane Demon", 0.90},
+        {"Extreme Demon", 1.00},
+    }};
+
+    for (auto const& [label, score] : values) {
+        if (target.label == label) {
+            target.score = score;
+            return target;
+        }
+    }
+
+    target.label = "Hard Demon";
+    target.score = 0.80;
+    return target;
+}
 
 int portalObjectIDForMode(GameplayMode mode) {
     switch (mode) {
@@ -453,7 +487,7 @@ AnalysisData readAnalysis(std::filesystem::path const& analysisPath, std::string
     return analysis;
 }
 
-LearnedProfile readLearnedProfile() {
+LearnedProfile readLearnedProfile(std::string const& targetDifficulty) {
     LearnedProfile profile;
     auto profilePath = Mod::get()->getResourcesDir() / "learned-profile-v1.json";
 
@@ -483,8 +517,46 @@ LearnedProfile readLearnedProfile() {
             root["recommended_max_events_per_phrase"].asDouble().unwrapOr(3.0)
         ),
         2,
-        6
+        12
     );
+
+    static std::array<char const*, 5> const modeNames = {
+        "cube",
+        "ship",
+        "ball",
+        "ufo",
+        "wave",
+    };
+
+    auto allModeProfiles = root["mode_profiles"];
+    auto difficultyModeProfiles =
+        root["difficulty_profiles"][targetDifficulty]["mode_profiles"];
+
+    for (std::size_t index = 0; index < modeNames.size(); ++index) {
+        auto modeName = modeNames[index];
+
+        double overallValue =
+            allModeProfiles[modeName]["recommended_max_events_per_phrase"]
+                .asDouble()
+                .unwrapOr(0.0);
+        double difficultyValue =
+            difficultyModeProfiles[modeName]["recommended_max_events_per_phrase"]
+                .asDouble()
+                .unwrapOr(0.0);
+
+        double selectedValue =
+            difficultyValue > 0.0 ? difficultyValue : overallValue;
+
+        if (selectedValue <= 0.0) {
+            selectedValue = static_cast<double>(profile.recommendedMaxEvents);
+        }
+
+        profile.recommendedEventsByMode[index] = std::clamp(
+            static_cast<int>(std::round(selectedValue)),
+            2,
+            12
+        );
+    }
 
     profile.hazardOrbPad =
         weights["hazard_orb_pad"].asDouble().unwrapOr(profile.hazardOrbPad);
@@ -858,7 +930,11 @@ BaselineGenerationResult generateBaselineLayout(
         return result;
     }
 
-    auto profile = readLearnedProfile();
+    auto difficultyTarget = readDifficultyTarget();
+    result.targetDifficulty = difficultyTarget.label;
+    result.targetDifficultyScore = difficultyTarget.score;
+
+    auto profile = readLearnedProfile(difficultyTarget.label);
     result.learnedProfileLoaded = profile.loaded;
     result.learnedSourceLevels = profile.sourceLevels;
     result.learnedSourcePhrases = profile.sourcePhrases;
@@ -1163,8 +1239,13 @@ BaselineGenerationResult generateBaselineLayout(
         chunkEnergy /= 8.0;
         chunkOnset /= 8.0;
 
-        double targetIntensity = std::clamp(
+        double songIntensity = std::clamp(
             chunkEnergy * 0.68 + chunkOnset * 0.32,
+            0.0,
+            1.0
+        );
+        double targetIntensity = std::clamp(
+            songIntensity * 0.52 + difficultyTarget.score * 0.66,
             0.0,
             1.0
         );
@@ -1307,8 +1388,16 @@ BaselineGenerationResult generateBaselineLayout(
             );
 
             float usableWidth = chunkEndX - geometryStartX;
+            int difficultySegments = std::clamp(
+                4 + static_cast<int>(std::round(difficultyTarget.score * 4.0)),
+                4,
+                8
+            );
             int pathSegments = std::clamp(
-                static_cast<int>(std::ceil(usableWidth / 175.0f)),
+                std::max(
+                    static_cast<int>(std::ceil(usableWidth / 175.0f)),
+                    difficultySegments
+                ),
                 4,
                 8
             );
@@ -1411,10 +1500,20 @@ BaselineGenerationResult generateBaselineLayout(
                 );
             }
 
+            int learnedCubeTarget =
+                profile.recommendedEventsByMode[
+                    gameplayModeIndex(GameplayMode::Cube)
+                ];
             int hazardBudget = std::clamp(
-                learnedHazards + (targetIntensity > 0.64 ? 1 : 0),
-                1,
-                3
+                std::max(
+                    learnedHazards,
+                    learnedCubeTarget / 2
+                )
+                    + static_cast<int>(
+                        std::round(difficultyTarget.score * 2.5)
+                    ),
+                2,
+                6
             );
             int hazardsPlaced = 0;
 
@@ -1450,24 +1549,47 @@ BaselineGenerationResult generateBaselineLayout(
         } else if (currentMode == GameplayMode::Ship) {
             float centerY = std::clamp(pathAnchorY, 180.0f, 630.0f);
             float availableHalfGap = std::max(
-                120.0f,
-                std::min(centerY - 45.0f, 765.0f - centerY)
+                90.0f,
+                std::min(centerY - kGroundY, 825.0f - centerY)
             );
             float desiredHalfGap = std::clamp(
-                195.0f - static_cast<float>(targetIntensity) * 30.0f,
-                150.0f,
+                205.0f
+                    - static_cast<float>(difficultyTarget.score) * 85.0f
+                    - static_cast<float>(targetIntensity) * 15.0f,
+                105.0f,
                 195.0f
             );
             float halfGap = std::min(desiredHalfGap, availableHalfGap);
 
-            addSolidRail(geometryStartX, chunkEndX, centerY - halfGap);
-            addSolidRail(geometryStartX, chunkEndX, centerY + halfGap);
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                std::max(kGroundY, centerY - halfGap)
+            );
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                std::min(825.0f, centerY + halfGap)
+            );
 
             int shipPattern = static_cast<int>(generatedMotifs % 3);
-            int obstacleCount =
-                shipPattern == 1
-                    ? 4
-                    : (targetIntensity > 0.66 ? 3 : 2);
+            int learnedShipTarget =
+                profile.recommendedEventsByMode[
+                    gameplayModeIndex(GameplayMode::Ship)
+                ];
+            int obstacleCount = std::clamp(
+                std::max(
+                    3 + static_cast<int>(
+                        std::round(difficultyTarget.score * 3.0)
+                    ),
+                    (learnedShipTarget + 1) / 2
+                ),
+                3,
+                7
+            );
+            if (shipPattern == 1) {
+                obstacleCount = std::min(7, obstacleCount + 1);
+            }
             float obstacleWidth = chunkEndX - obstacleStartX;
 
             for (int index = 0; index < obstacleCount; ++index) {
@@ -1525,18 +1647,43 @@ BaselineGenerationResult generateBaselineLayout(
             pathAnchorY = centerY;
         } else if (currentMode == GameplayMode::Ball) {
             float centerY = std::clamp(pathAnchorY, 180.0f, 630.0f);
-            float halfGap = 150.0f;
-            float floorBlockY = centerY - halfGap;
-            float ceilingBlockY = centerY + halfGap;
+            float desiredHalfGap = std::clamp(
+                185.0f
+                    - static_cast<float>(difficultyTarget.score) * 65.0f,
+                120.0f,
+                180.0f
+            );
+            float halfGap = std::min(
+                desiredHalfGap,
+                std::max(
+                    90.0f,
+                    std::min(centerY - kGroundY, 825.0f - centerY)
+                )
+            );
+            float floorBlockY = std::max(kGroundY, centerY - halfGap);
+            float ceilingBlockY = std::min(825.0f, centerY + halfGap);
 
             addSolidRail(geometryStartX, chunkEndX, floorBlockY);
             addSolidRail(geometryStartX, chunkEndX, ceilingBlockY);
 
             int ballPattern = static_cast<int>(generatedMotifs % 3);
-            int flipCount =
-                ballPattern == 1
-                    ? 4
-                    : (targetIntensity > 0.64 ? 4 : 3);
+            int learnedBallTarget =
+                profile.recommendedEventsByMode[
+                    gameplayModeIndex(GameplayMode::Ball)
+                ];
+            int flipCount = std::clamp(
+                std::max(
+                    3 + static_cast<int>(
+                        std::round(difficultyTarget.score * 3.5)
+                    ),
+                    (learnedBallTarget + 1) / 2
+                ),
+                3,
+                7
+            );
+            if (ballPattern == 1) {
+                flipCount = std::min(7, flipCount + 1);
+            }
             float obstacleWidth = chunkEndX - obstacleStartX;
 
             for (int index = 0; index < flipCount; ++index) {
@@ -1587,19 +1734,46 @@ BaselineGenerationResult generateBaselineLayout(
         } else if (currentMode == GameplayMode::Ufo) {
             float centerY = std::clamp(pathAnchorY, 180.0f, 630.0f);
             float availableHalfGap = std::max(
-                135.0f,
-                std::min(centerY - 45.0f, 765.0f - centerY)
+                90.0f,
+                std::min(centerY - kGroundY, 825.0f - centerY)
             );
-            float halfGap = std::min(195.0f, availableHalfGap);
+            float desiredHalfGap = std::clamp(
+                210.0f
+                    - static_cast<float>(difficultyTarget.score) * 75.0f,
+                120.0f,
+                195.0f
+            );
+            float halfGap = std::min(desiredHalfGap, availableHalfGap);
 
-            addSolidRail(geometryStartX, chunkEndX, centerY - halfGap);
-            addSolidRail(geometryStartX, chunkEndX, centerY + halfGap);
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                std::max(kGroundY, centerY - halfGap)
+            );
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                std::min(825.0f, centerY + halfGap)
+            );
 
             int ufoPattern = static_cast<int>(generatedMotifs % 3);
-            int gateCount =
-                ufoPattern == 2
-                    ? 5
-                    : (targetIntensity > 0.65 ? 4 : 3);
+            int learnedUfoTarget =
+                profile.recommendedEventsByMode[
+                    gameplayModeIndex(GameplayMode::Ufo)
+                ];
+            int gateCount = std::clamp(
+                std::max(
+                    3 + static_cast<int>(
+                        std::round(difficultyTarget.score * 4.0)
+                    ),
+                    (learnedUfoTarget + 1) / 2
+                ),
+                3,
+                8
+            );
+            if (ufoPattern == 2) {
+                gateCount = std::min(8, gateCount + 1);
+            }
             float obstacleWidth = chunkEndX - obstacleStartX;
 
             for (int index = 0; index < gateCount; ++index) {
@@ -1649,15 +1823,27 @@ BaselineGenerationResult generateBaselineLayout(
         } else if (currentMode == GameplayMode::Wave) {
             float centerY = std::clamp(pathAnchorY, 180.0f, 630.0f);
             float railGap = std::clamp(
-                150.0f - static_cast<float>(targetIntensity) * 15.0f,
-                120.0f,
+                180.0f
+                    - static_cast<float>(difficultyTarget.score) * 75.0f
+                    - static_cast<float>(targetIntensity) * 10.0f,
+                95.0f,
                 150.0f
             );
             int wavePattern = static_cast<int>(generatedMotifs % 3);
+            float baseSegmentLength = std::clamp(
+                165.0f
+                    - static_cast<float>(difficultyTarget.score) * 90.0f,
+                75.0f,
+                150.0f
+            );
             float segmentLength =
                 wavePattern == 0
-                    ? 120.0f
-                    : (wavePattern == 1 ? 90.0f : 150.0f);
+                    ? baseSegmentLength
+                    : (
+                        wavePattern == 1
+                            ? baseSegmentLength * 0.80f
+                            : baseSegmentLength * 1.20f
+                    );
             float amplitude =
                 targetIntensity > 0.70 ? 75.0f : 60.0f;
             float endCenterY = centerY;
@@ -1698,13 +1884,13 @@ BaselineGenerationResult generateBaselineLayout(
                 addCleanStructure(
                     1,
                     MotifKind::Solid,
-                    {x, pathY - railGap},
+                    {x, std::max(kGroundY, pathY - railGap)},
                     0.0f
                 );
                 addCleanStructure(
                     1,
                     MotifKind::Solid,
-                    {x, pathY + railGap},
+                    {x, std::min(825.0f, pathY + railGap)},
                     0.0f
                 );
 
@@ -1722,9 +1908,10 @@ BaselineGenerationResult generateBaselineLayout(
         ++result.phraseCount;
 
         log::debug(
-            "Gameplay chunk {}: mode={}, intensity={:.3f}, anchorY={:.1f}",
+            "Gameplay chunk {}: mode={}, target={}, intensity={:.3f}, anchorY={:.1f}",
             generatedMotifs,
             gameplayModeName(currentMode),
+            difficultyTarget.label,
             targetIntensity,
             pathAnchorY
         );
