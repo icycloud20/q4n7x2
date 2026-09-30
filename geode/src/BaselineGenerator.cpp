@@ -914,10 +914,13 @@ BaselineGenerationResult generateBaselineLayout(
     result.learnedStructuralProfileLoaded = structuralProfile.loaded;
     result.learnedMotifCount = structuralProfile.motifs.size();
 
-    float pathAnchorY = kGroundY;
-    bool currentInverted = false;
-    bool currentMini = editorLayer->m_levelSettings->m_startMini;
+    // pathAnchorY is always the nominal player-center height. Cube platforms
+    // sit 30 units below it; ship/UFO/wave use it as their corridor center.
+    float pathAnchorY = kGroundY + 30.0f;
     std::size_t generatedMotifs = 0;
+    GameplayMode currentMode = GameplayMode::Cube;
+    GameplayMode previousSectionMode = GameplayMode::Cube;
+    GameplayMode twoBackSectionMode = GameplayMode::Cube;
     StructuralMotif const* previousMotif = nullptr;
     StructuralMotif const* twoBackMotif = nullptr;
 
@@ -1062,57 +1065,119 @@ BaselineGenerationResult generateBaselineLayout(
         return positionForAudioTime(time);
     };
 
-    if (structuralProfile.loaded && !currentMini) {
-        for (
-            std::size_t start = 4;
-            start + 8 < beats.size();
-            start += 8, ++generatedMotifs
-        ) {
-            double chunkEnergy = 0.0;
-            double chunkOnset = 0.0;
+    auto addModePortal = [&](
+        GameplayMode mode,
+        float x,
+        float y
+    ) {
+        CCPoint position = snappedStructurePosition({x, y});
 
-            for (std::size_t index = start; index < start + 8; ++index) {
-                chunkEnergy += beats[index].energy;
-                chunkOnset += beats[index].onset;
+        if (!addGeneratedObjectWithRotation(
+            editorLayer,
+            portalObjectIDForMode(mode),
+            position,
+            0.0f
+        )) {
+            return false;
+        }
+
+        placedActions.push_back(position);
+        ++createdObjects;
+        ++gameplayEvents;
+        return true;
+    };
+
+    auto addPlayerSurfaceSpike = [&](
+        float x,
+        float playerY,
+        bool inverted
+    ) {
+        return addCleanAction(
+            8,
+            {x, playerY},
+            inverted ? 180.0f : 0.0f
+        );
+    };
+
+    auto addPlayerSurfacePad = [&](
+        int objectID,
+        float x,
+        float playerY
+    ) {
+        // A standing cube center is 30 units above the block center. Pads sit
+        // on the block surface, so their anchor belongs slightly below the
+        // player center rather than inside/below the block.
+        return addCleanAction(
+            objectID,
+            {x, playerY - 12.0f},
+            0.0f
+        );
+    };
+
+    auto addSolidRail = [&](
+        float startX,
+        float endX,
+        float y
+    ) {
+        std::size_t added = 0;
+
+        for (float x = startX; x <= endX + 1.0f; x += 30.0f) {
+            if (addCleanStructure(
+                1,
+                MotifKind::Solid,
+                {x, y},
+                0.0f
+            )) {
+                ++added;
             }
+        }
 
-            chunkEnergy /= 8.0;
-            chunkOnset /= 8.0;
-            double targetIntensity = std::clamp(
-                chunkEnergy * 0.68 + chunkOnset * 0.32,
-                0.0,
-                1.0
-            );
+        return added;
+    };
 
-            auto const* motif = chooseStructuralMotif(
+    for (
+        std::size_t start = 4;
+        start + 8 < beats.size();
+        start += 8, ++generatedMotifs
+    ) {
+        double chunkEnergy = 0.0;
+        double chunkOnset = 0.0;
+
+        for (std::size_t index = start; index < start + 8; ++index) {
+            chunkEnergy += beats[index].energy;
+            chunkOnset += beats[index].onset;
+        }
+
+        chunkEnergy /= 8.0;
+        chunkOnset /= 8.0;
+
+        double targetIntensity = std::clamp(
+            chunkEnergy * 0.68 + chunkOnset * 0.32,
+            0.0,
+            1.0
+        );
+
+        auto const* motif = structuralProfile.loaded
+            ? chooseStructuralMotif(
                 structuralProfile,
                 generatedMotifs,
                 targetIntensity,
-                pathAnchorY,
-                currentInverted,
-                currentMini,
+                std::clamp(pathAnchorY - 30.0f, kGroundY, 720.0f),
+                false,
+                false,
                 previousMotif,
                 twoBackMotif
-            );
+            )
+            : nullptr;
 
-            if (!motif) {
-                // If the current state has no matching motif, keep a safe short
-                // connector instead of inventing a random object combination.
-                float x0 = positionForBeat(beats[start]).x;
-                float x8 = positionForBeat(beats[start + 8]).x;
-                addCleanBridge(x0, x8, pathAnchorY);
-                continue;
-            }
+        int learnedHazards = 1;
+        int learnedOrbs = 0;
+        int learnedPads = 0;
+        float learnedDeltaY = 0.0f;
 
-            float motifAnchorY = pathAnchorY;
-
-            // Path-first v3.1: learn the *kind* of gameplay from the motif,
-            // then build a fresh, conservative cube path around real landings.
-            // Raw source coordinates and gravity-changing interactions are not
-            // copied because they only make sense inside their original level.
-            int learnedHazards = 0;
-            int learnedOrbs = 0;
-            int learnedPads = 0;
+        if (motif) {
+            learnedHazards = 0;
+            learnedDeltaY = motif->exitDeltaY;
 
             for (auto const& event : motif->events) {
                 if (event.kind == MotifKind::Hazard) {
@@ -1123,161 +1188,218 @@ BaselineGenerationResult generateBaselineLayout(
                     ++learnedPads;
                 }
             }
+        }
 
+        float chunkStartX = positionForBeatOffset(start, 0.0).x;
+        float chunkEndX = positionForBeatOffset(start, 8.0).x;
+
+        if (
+            !std::isfinite(chunkStartX)
+            || !std::isfinite(chunkEndX)
+            || chunkEndX <= chunkStartX
+        ) {
+            continue;
+        }
+
+        bool modeChangedThisChunk = false;
+
+        // Modes are planned in 16-beat sections so a form has enough time to
+        // develop an actual gameplay identity instead of portal-spamming.
+        if (generatedMotifs % 2 == 0) {
+            double sectionEnergy = 0.0;
+            double sectionOnset = 0.0;
+            std::size_t sectionCount = 0;
+
+            std::size_t sectionEnd = std::min(start + 16, beats.size());
+            for (std::size_t index = start; index < sectionEnd; ++index) {
+                sectionEnergy += beats[index].energy;
+                sectionOnset += beats[index].onset;
+                ++sectionCount;
+            }
+
+            if (sectionCount > 0) {
+                sectionEnergy /= static_cast<double>(sectionCount);
+                sectionOnset /= static_cast<double>(sectionCount);
+            }
+
+            std::size_t sectionIndex = generatedMotifs / 2;
+            GameplayMode desiredMode = chooseGameplayModeForSection(
+                sectionIndex,
+                sectionEnergy,
+                sectionOnset,
+                previousSectionMode,
+                twoBackSectionMode
+            );
+
+            twoBackSectionMode = previousSectionMode;
+            previousSectionMode = desiredMode;
+
+            if (desiredMode != currentMode) {
+                addModePortal(
+                    desiredMode,
+                    chunkStartX + 15.0f,
+                    std::clamp(pathAnchorY, 135.0f, 675.0f)
+                );
+                currentMode = desiredMode;
+                modeChangedThisChunk = true;
+                ++result.modeTransitions;
+            }
+
+            ++result.modeSections;
+        }
+
+        float geometryStartX =
+            chunkStartX + (modeChangedThisChunk ? 75.0f : 0.0f);
+        geometryStartX = std::min(geometryStartX, chunkEndX - 90.0f);
+
+        if (currentMode == GameplayMode::Cube) {
             float requestedDeltaY = std::clamp(
-                motif->exitDeltaY,
-                -120.0f,
-                120.0f
+                learnedDeltaY,
+                -90.0f,
+                90.0f
             );
             float snappedDeltaY =
                 std::round(requestedDeltaY / 30.0f) * 30.0f;
 
-            // Do not repeatedly ask for downward movement while already on the
-            // floor. Turn that intent into a small climb so the layout develops
-            // actual shape instead of becoming one endless flat trampoline row.
-            if (motifAnchorY <= kGroundY + 1.0f && snappedDeltaY < 0.0f) {
+            if (
+                pathAnchorY <= kGroundY + 30.0f + 1.0f
+                && snappedDeltaY < 0.0f
+            ) {
                 snappedDeltaY = targetIntensity > 0.68 ? 60.0f : 30.0f;
             }
 
-            if (motifAnchorY >= 690.0f && snappedDeltaY > 0.0f) {
+            if (pathAnchorY >= 660.0f && snappedDeltaY > 0.0f) {
                 snappedDeltaY = -std::max(30.0f, snappedDeltaY);
             }
 
-            float targetY = std::clamp(
-                motifAnchorY + snappedDeltaY,
-                kGroundY,
-                720.0f
+            float targetPlayerY = std::clamp(
+                pathAnchorY + snappedDeltaY,
+                kGroundY + 30.0f,
+                690.0f
             );
 
-            float chunkStartX = positionForBeatOffset(start, 0.0).x;
-            float chunkEndX = positionForBeatOffset(start, 8.0).x;
-            float chunkWidth = chunkEndX - chunkStartX;
-
-            if (
-                !std::isfinite(chunkStartX)
-                || !std::isfinite(chunkEndX)
-                || chunkWidth <= 0.0f
-            ) {
-                continue;
-            }
-
-            int horizontalSegments = std::max(
-                4,
-                static_cast<int>(std::ceil(chunkWidth / 175.0f))
-            );
-            int verticalSegments = static_cast<int>(
-                std::ceil(std::abs(targetY - motifAnchorY) / 30.0f)
-            );
+            float usableWidth = chunkEndX - geometryStartX;
             int pathSegments = std::clamp(
-                std::max(horizontalSegments, verticalSegments),
+                static_cast<int>(std::ceil(usableWidth / 175.0f)),
                 4,
-                10
+                8
             );
 
             struct PlannedLanding {
                 float x = 0.0f;
-                float y = kGroundY;
+                float playerY = kGroundY + 30.0f;
                 int width = 3;
             };
 
             std::vector<PlannedLanding> landings;
             landings.reserve(static_cast<std::size_t>(pathSegments + 1));
 
-            float previousY = motifAnchorY;
-            float bumpAmplitude = targetIntensity > 0.72 ? 60.0f : 30.0f;
-            float bumpDirection = motifAnchorY > 540.0f ? -1.0f : 1.0f;
+            float previousPlayerY = pathAnchorY;
+            float bumpAmplitude = targetIntensity > 0.70 ? 60.0f : 30.0f;
+            float bumpDirection = pathAnchorY > 540.0f ? -1.0f : 1.0f;
 
             for (int segment = 0; segment <= pathSegments; ++segment) {
                 double progress =
                     static_cast<double>(segment)
                     / static_cast<double>(pathSegments);
                 float x =
-                    chunkStartX
-                    + chunkWidth * static_cast<float>(progress);
+                    geometryStartX
+                    + usableWidth * static_cast<float>(progress);
 
                 float linearY =
-                    motifAnchorY
-                    + (targetY - motifAnchorY) * static_cast<float>(progress);
+                    pathAnchorY
+                    + (targetPlayerY - pathAnchorY)
+                        * static_cast<float>(progress);
                 float arcY =
                     std::sin(static_cast<float>(progress) * 3.14159265f)
                     * bumpAmplitude
                     * bumpDirection;
-                float candidateY =
+                float candidatePlayerY =
                     std::round((linearY + arcY) / 30.0f) * 30.0f;
 
                 if (segment == 0) {
-                    candidateY = motifAnchorY;
+                    candidatePlayerY = pathAnchorY;
                 } else if (segment == pathSegments) {
-                    candidateY = targetY;
+                    candidatePlayerY = targetPlayerY;
                 } else {
-                    candidateY = std::clamp(
-                        candidateY,
-                        previousY - 30.0f,
-                        previousY + 30.0f
+                    candidatePlayerY = std::clamp(
+                        candidatePlayerY,
+                        previousPlayerY - 30.0f,
+                        previousPlayerY + 30.0f
                     );
 
                     int remaining = pathSegments - segment;
-                    float minimumReachable =
-                        targetY - static_cast<float>(remaining) * 30.0f;
-                    float maximumReachable =
-                        targetY + static_cast<float>(remaining) * 30.0f;
-                    candidateY = std::clamp(
-                        candidateY,
-                        minimumReachable,
-                        maximumReachable
+                    candidatePlayerY = std::clamp(
+                        candidatePlayerY,
+                        targetPlayerY
+                            - static_cast<float>(remaining) * 30.0f,
+                        targetPlayerY
+                            + static_cast<float>(remaining) * 30.0f
                     );
                 }
 
-                candidateY = std::clamp(candidateY, kGroundY, 720.0f);
+                candidatePlayerY = std::clamp(
+                    candidatePlayerY,
+                    kGroundY + 30.0f,
+                    690.0f
+                );
 
-                int width = 3;
-                if (segment == 0 || segment == pathSegments) {
-                    width = 4;
-                } else if ((segment + static_cast<int>(generatedMotifs)) % 3 == 0) {
+                int width =
+                    (segment == 0 || segment == pathSegments) ? 4 : 3;
+
+                if (
+                    segment > 0
+                    && segment < pathSegments
+                    && (segment + static_cast<int>(generatedMotifs)) % 3 == 0
+                ) {
                     width = 4;
                 }
 
-                landings.push_back({x, candidateY, width});
-                previousY = candidateY;
+                landings.push_back({
+                    x,
+                    candidatePlayerY,
+                    width,
+                });
+                previousPlayerY = candidatePlayerY;
             }
 
-            // Use one learned orb/pad idea at most per chunk. Their *positions*
-            // are designed here around the solved path rather than copied from
-            // the source song.
             int orbTransition = -1;
-            if (learnedOrbs > 0 && pathSegments >= 4) {
-                orbTransition = std::clamp(pathSegments / 2, 1, pathSegments - 2);
+            if (
+                learnedOrbs > 0
+                && targetIntensity > 0.42
+                && pathSegments >= 4
+            ) {
+                orbTransition =
+                    std::clamp(pathSegments / 2, 1, pathSegments - 2);
             }
 
             int padTransition = -1;
-            if (learnedPads > 0 && pathSegments >= 3) {
+            if (learnedPads > 0 && pathSegments >= 4) {
                 int preferred =
                     generatedMotifs % 2 == 0 ? 1 : pathSegments - 2;
 
                 if (preferred == orbTransition) {
                     preferred =
                         preferred == 1
-                            ? std::min(2, pathSegments - 1)
-                            : std::max(0, pathSegments - 3);
+                            ? 2
+                            : pathSegments - 3;
                 }
 
-                if (preferred != orbTransition) {
+                if (preferred >= 0 && preferred != orbTransition) {
                     padTransition = preferred;
                 }
             }
 
-            if (orbTransition >= 0) {
-                // Give the orb transition a real gap and a generous landing.
-                landings[static_cast<std::size_t>(orbTransition)].width = 2;
-                landings[static_cast<std::size_t>(orbTransition + 1)].width = 4;
-            }
-
             for (auto const& landing : landings) {
-                addLandingPlatform(landing.x, landing.y, landing.width);
+                addLandingPlatform(
+                    landing.x,
+                    landing.playerY - 30.0f,
+                    landing.width
+                );
             }
 
             int hazardBudget = std::clamp(
-                learnedHazards + (targetIntensity > 0.62 ? 1 : 0),
+                learnedHazards + (targetIntensity > 0.64 ? 1 : 0),
                 1,
                 3
             );
@@ -1290,24 +1412,24 @@ BaselineGenerationResult generateBaselineLayout(
                     landings[static_cast<std::size_t>(transition + 1)];
 
                 if (transition == orbTransition) {
-                    float orbX = current.x + (next.x - current.x) * 0.48f;
-                    float orbY = std::max(current.y, next.y) + 60.0f;
+                    float orbX =
+                        current.x + (next.x - current.x) * 0.50f;
+                    float orbY =
+                        std::max(current.playerY, next.playerY) + 45.0f;
 
-                    // Normalize every learned orb to a normal yellow jump orb.
-                    // Blue/green/spider/etc. effects require their own physics
-                    // solver and are rejected from this cube-only path pass.
                     addCleanAction(36, {orbX, orbY}, 0.0f);
                     continue;
                 }
 
                 if (transition == padTransition) {
                     int padObjectID =
-                        next.y > current.y + 1.0f ? 35 : 140;
-                    float padX = current.x + 15.0f;
-                    float padY = current.y - 13.0f;
+                        next.playerY > current.playerY + 1.0f ? 35 : 140;
 
-                    // Yellow or pink only: both preserve normal gravity.
-                    addCleanAction(padObjectID, {padX, padY}, 0.0f);
+                    addPlayerSurfacePad(
+                        padObjectID,
+                        current.x + 15.0f,
+                        current.playerY
+                    );
                     continue;
                 }
 
@@ -1316,50 +1438,246 @@ BaselineGenerationResult generateBaselineLayout(
                     && current.width >= 3
                     && (
                         transition % 2 == 0
-                        || targetIntensity > 0.72
+                        || targetIntensity > 0.74
                     )
                 ) {
                     float spikeX =
                         current.x
                         + (current.width >= 4 ? 30.0f : 15.0f);
 
-                    // Small spike: enough to demand a jump without turning each
-                    // island into a blind or frame-perfect landing.
-                    if (addCleanAction(8, {spikeX, current.y}, 0.0f)) {
+                    if (addPlayerSurfaceSpike(
+                        spikeX,
+                        current.playerY,
+                        false
+                    )) {
                         ++hazardsPlaced;
                     }
                 }
             }
 
+            pathAnchorY = targetPlayerY;
+        } else if (currentMode == GameplayMode::Ship) {
+            float centerY = std::clamp(
+                pathAnchorY + (pathAnchorY < 210.0f ? 90.0f : 0.0f),
+                225.0f,
+                600.0f
+            );
+            float halfGap = std::clamp(
+                165.0f - static_cast<float>(targetIntensity) * 35.0f,
+                120.0f,
+                165.0f
+            );
+
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                centerY - halfGap
+            );
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                centerY + halfGap
+            );
+
+            int obstacleCount =
+                targetIntensity > 0.72 ? 4 : (targetIntensity > 0.48 ? 3 : 2);
+
+            for (int index = 0; index < obstacleCount; ++index) {
+                double beatOffset =
+                    1.5
+                    + static_cast<double>(index)
+                        * (5.0 / std::max(1, obstacleCount - 1));
+                float x = positionForBeatOffset(start, beatOffset).x;
+                bool fromFloor =
+                    (index + static_cast<int>(generatedMotifs)) % 2 == 0;
+                int height =
+                    targetIntensity > 0.70 && index % 2 == 0 ? 3 : 2;
+
+                for (int layer = 1; layer <= height; ++layer) {
+                    float y = fromFloor
+                        ? centerY - halfGap + static_cast<float>(layer * 30)
+                        : centerY + halfGap - static_cast<float>(layer * 30);
+                    addCleanStructure(
+                        1,
+                        MotifKind::Solid,
+                        {x, y},
+                        0.0f
+                    );
+                }
+            }
+
+            pathAnchorY = centerY;
+        } else if (currentMode == GameplayMode::Ball) {
+            float centerY = std::clamp(pathAnchorY, 240.0f, 570.0f);
+            float halfGap = 135.0f;
+            float floorBlockY = centerY - halfGap;
+            float ceilingBlockY = centerY + halfGap;
+
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                floorBlockY
+            );
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                ceilingBlockY
+            );
+
+            int flipCount =
+                targetIntensity > 0.68 ? 4 : 3;
+
+            for (int index = 0; index < flipCount; ++index) {
+                double progress =
+                    static_cast<double>(index + 1)
+                    / static_cast<double>(flipCount + 1);
+                float x =
+                    geometryStartX
+                    + (chunkEndX - geometryStartX)
+                        * static_cast<float>(progress);
+                bool floorHazard =
+                    (index + static_cast<int>(generatedMotifs)) % 2 == 0;
+
+                float playerSurfaceY = floorHazard
+                    ? floorBlockY + 30.0f
+                    : ceilingBlockY - 30.0f;
+
+                addPlayerSurfaceSpike(
+                    x,
+                    playerSurfaceY,
+                    !floorHazard
+                );
+            }
+
+            pathAnchorY = centerY;
+        } else if (currentMode == GameplayMode::Ufo) {
+            float centerY = std::clamp(
+                pathAnchorY + (pathAnchorY < 210.0f ? 90.0f : 0.0f),
+                240.0f,
+                585.0f
+            );
+            float halfGap = 165.0f;
+
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                centerY - halfGap
+            );
+            addSolidRail(
+                geometryStartX,
+                chunkEndX,
+                centerY + halfGap
+            );
+
+            int gateCount =
+                targetIntensity > 0.68 ? 4 : 3;
+
+            for (int index = 0; index < gateCount; ++index) {
+                double progress =
+                    static_cast<double>(index + 1)
+                    / static_cast<double>(gateCount + 1);
+                float x =
+                    geometryStartX
+                    + (chunkEndX - geometryStartX)
+                        * static_cast<float>(progress);
+                bool fromFloor =
+                    (index + static_cast<int>(generatedMotifs)) % 2 == 0;
+                int height =
+                    targetIntensity > 0.74 ? 3 : 2;
+
+                for (int layer = 1; layer <= height; ++layer) {
+                    float y = fromFloor
+                        ? centerY - halfGap + static_cast<float>(layer * 30)
+                        : centerY + halfGap - static_cast<float>(layer * 30);
+                    addCleanStructure(
+                        1,
+                        MotifKind::Solid,
+                        {x, y},
+                        0.0f
+                    );
+                }
+
+                float tipY = fromFloor
+                    ? centerY - halfGap
+                        + static_cast<float>((height + 1) * 30)
+                    : centerY + halfGap
+                        - static_cast<float>((height + 1) * 30);
+
+                addPlayerSurfaceSpike(
+                    x,
+                    tipY,
+                    !fromFloor
+                );
+            }
+
+            pathAnchorY = centerY;
+        } else if (currentMode == GameplayMode::Wave) {
+            float centerY = std::clamp(pathAnchorY, 255.0f, 555.0f);
+            float railGap = std::clamp(
+                135.0f - static_cast<float>(targetIntensity) * 20.0f,
+                105.0f,
+                135.0f
+            );
+            float segmentLength =
+                targetIntensity > 0.68 ? 90.0f : 120.0f;
+            float amplitude =
+                targetIntensity > 0.72 ? 75.0f : 60.0f;
+            float endCenterY = centerY;
+
+            for (
+                float x = geometryStartX;
+                x <= chunkEndX + 1.0f;
+                x += 30.0f
+            ) {
+                float distance = x - geometryStartX;
+                int segment = static_cast<int>(
+                    std::floor(distance / segmentLength)
+                );
+                float local =
+                    std::fmod(distance, segmentLength) / segmentLength;
+                float direction = segment % 2 == 0 ? 1.0f : -1.0f;
+                float startOffset = segment % 2 == 0 ? -amplitude : amplitude;
+                float centerOffset =
+                    startOffset + direction * local * amplitude * 2.0f;
+                float pathY = std::clamp(
+                    centerY + centerOffset,
+                    210.0f,
+                    630.0f
+                );
+
+                addCleanStructure(
+                    1,
+                    MotifKind::Solid,
+                    {x, pathY - railGap},
+                    0.0f
+                );
+                addCleanStructure(
+                    1,
+                    MotifKind::Solid,
+                    {x, pathY + railGap},
+                    0.0f
+                );
+
+                endCenterY = pathY;
+            }
+
+            pathAnchorY = endCenterY;
+        }
+
+        if (motif) {
             twoBackMotif = previousMotif;
             previousMotif = motif;
-
-            // Advance from the path we actually built, never from discarded raw
-            // geometry. This keeps the next chunk anchored to a real landing.
-            pathAnchorY = targetY;
-            currentInverted = motif->exitInverted;
-            currentMini = motif->exitMini;
-            ++result.phraseCount;
         }
-    } else {
-        // Small fallback only for a missing/corrupt motif resource. Normal builds
-        // should never take this path.
-        for (std::size_t start = 4; start + 3 < beats.size(); start += 4) {
-            float x0 = positionForBeat(beats[start]).x;
-            float x2 = positionForBeat(beats[start + 2]).x;
 
-            addCleanBridge(x0 - 30.0f, x2, kGroundY);
+        ++result.phraseCount;
 
-            if (addCountedObject(
-                editorLayer,
-                8,
-                {x2 + 30.0f, kGroundY},
-                createdObjects,
-                gameplayEvents
-            )) {
-                ++result.phraseCount;
-            }
-        }
+        log::debug(
+            "Gameplay chunk {}: mode={}, intensity={:.3f}, anchorY={:.1f}",
+            generatedMotifs,
+            gameplayModeName(currentMode),
+            targetIntensity,
+            pathAnchorY
+        );
     }
 
     if (createdObjects == 0) {
