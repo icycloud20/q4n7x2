@@ -131,6 +131,7 @@ class PlannerRequest:
     entry_speed: str = "normal"
     entry_mini: bool = False
     previous_mode: str = "cube"
+    seconds_per_beat: float = 0.5
 
 
 def _finite_number(value: Any) -> float | None:
@@ -198,6 +199,65 @@ def _state_for_chunk(objects: list[dict[str, Any]], fallback_mode: str) -> dict[
     }
 
 
+def _stable_state_signature(
+    objects: list[dict[str, Any]],
+) -> tuple[str, str, bool, str, bool, bool] | None:
+    signatures: set[tuple[str, str, bool, str, bool, bool]] = set()
+
+    for item in objects:
+        state = item.get("state_before")
+        if not isinstance(state, dict):
+            continue
+
+        signatures.add(
+            (
+                str(state.get("mode", "")),
+                str(state.get("gravity", "normal")),
+                bool(state.get("mini", False)),
+                str(state.get("speed", "normal")),
+                bool(state.get("dual", False)),
+                bool(state.get("mirror", False)),
+            )
+        )
+
+    if len(signatures) != 1:
+        return None
+
+    return next(iter(signatures))
+
+
+def _source_seconds_per_beat(objects: list[dict[str, Any]]) -> float:
+    timed: list[tuple[float, float]] = []
+
+    for item in objects:
+        beat = _finite_number(item.get("beat"))
+        audio_time = _finite_number(item.get("audio_time_seconds"))
+        if beat is None or audio_time is None:
+            continue
+        timed.append((beat, audio_time))
+
+    timed.sort()
+    deltas: list[float] = []
+    previous: tuple[float, float] | None = None
+
+    for pair in timed:
+        if previous is None:
+            previous = pair
+            continue
+
+        beat_delta = pair[0] - previous[0]
+        time_delta = pair[1] - previous[1]
+        if beat_delta >= 0.125 and time_delta > 0.0:
+            candidate = time_delta / beat_delta
+            if 0.15 <= candidate <= 1.5:
+                deltas.append(candidate)
+            previous = pair
+        elif beat_delta > 1e-6:
+            previous = pair
+
+    return round(float(median(deltas)), 5) if deltas else 0.0
+
+
 def extract_reference_chunks(
     levels: list[dict[str, Any]],
     *,
@@ -233,6 +293,14 @@ def extract_reference_chunks(
         while start_beat + chunk_beats <= last_beat + 1e-6:
             end_beat = start_beat + chunk_beats
 
+            window_objects = [
+                item
+                for item in objects
+                if isinstance(item, dict)
+                if (beat := _finite_number(item.get("beat"))) is not None
+                if start_beat <= beat < end_beat
+            ]
+
             for mode in SUPPORTED_MODES:
                 mode_objects = list(
                     _iter_mode_objects(
@@ -245,6 +313,29 @@ def extract_reference_chunks(
                 if len(mode_objects) < 3:
                     continue
 
+                state_signature = _stable_state_signature(window_objects)
+                if state_signature is None:
+                    continue
+
+                (
+                    stable_mode,
+                    stable_gravity,
+                    stable_mini,
+                    stable_speed,
+                    stable_dual,
+                    stable_mirror,
+                ) = state_signature
+
+                # V1 human-chunk transplanting only accepts self-contained
+                # gameplay. Internal state transitions made the previous build
+                # look human but become physically meaningless after transplant.
+                if stable_mode != mode:
+                    continue
+                if stable_gravity != "normal" or stable_mini:
+                    continue
+                if stable_dual or stable_mirror:
+                    continue
+
                 interactions = [
                     item
                     for item in mode_objects
@@ -254,9 +345,30 @@ def extract_reference_chunks(
                     item
                     for item in mode_objects
                     if item.get("category") == "solid"
+                    and not bool(item.get("no_touch", False))
+                    and not bool(item.get("passable", False))
                 ]
 
                 if not interactions and len(solids) < 4:
+                    continue
+
+                if any(
+                    item.get("category") == "portal"
+                    for item in mode_objects
+                ):
+                    continue
+
+                boundary_unsafe = False
+                for item in interactions:
+                    beat = _finite_number(item.get("beat"))
+                    if beat is None:
+                        continue
+                    local_beat = beat - start_beat
+                    if local_beat < 0.375 or chunk_beats - local_beat < 0.375:
+                        boundary_unsafe = True
+                        break
+
+                if boundary_unsafe:
                     continue
 
                 all_y = [
@@ -322,32 +434,29 @@ def extract_reference_chunks(
                     category = str(item.get("category", ""))
                     if category not in RENDER_CATEGORIES:
                         continue
+                    if bool(item.get("no_touch", False)) or bool(item.get("passable", False)):
+                        continue
 
                     beat = _finite_number(item.get("beat"))
                     y = _finite_number(item.get("y"))
                     if beat is None or y is None:
                         continue
 
-                    beat_eighth = max(
-                        0,
-                        min(
-                            round(chunk_beats * 8),
-                            round((beat - start_beat) * 8),
-                        ),
-                    )
-                    y_step = round((y - anchor_y) / 15.0)
+                    local_beat = beat - start_beat
+                    relative_y = y - anchor_y
                     object_id = int(item.get("object_id", 0) or 0)
-                    rotation_value = _finite_number(item.get("rotation")) or 0.0
-                    rotation = int(round(rotation_value / 45.0) * 45)
+                    rotation = _finite_number(item.get("rotation")) or 0.0
+                    scale_x = _finite_number(item.get("scale_x")) or 1.0
+                    scale_y = _finite_number(item.get("scale_y")) or 1.0
 
-                    # Collapse duplicate collision solids at the same normalized
-                    # location while preserving distinct hazards/orbs/pads.
                     key = (
-                        beat_eighth,
-                        y_step,
+                        round(local_beat, 3),
+                        round(relative_y, 1),
                         category,
                         object_id,
-                        rotation,
+                        round(rotation, 2),
+                        round(scale_x, 3),
+                        round(scale_y, 3),
                     )
                     if key in seen_geometry:
                         continue
@@ -355,68 +464,78 @@ def extract_reference_chunks(
 
                     geometry_cells.append(
                         {
-                            "beat_eighth": beat_eighth,
-                            "y_step": y_step,
+                            "beat_offset": round(local_beat, 4),
+                            "relative_y": round(relative_y, 2),
+                            "beat_eighth": round(local_beat * 8),
+                            "y_step": round(relative_y / 15.0),
                             "category": category,
                             "object_id": object_id,
-                            "rotation": rotation,
+                            "rotation": round(rotation, 3),
+                            "scale_x": round(scale_x, 4),
+                            "scale_y": round(scale_y, 4),
                         }
                     )
 
                 geometry_cells.sort(
                     key=lambda item: (
-                        int(item["beat_eighth"]),
-                        int(item["y_step"]),
+                        float(item["beat_offset"]),
+                        float(item["relative_y"]),
                         str(item["category"]),
                     )
                 )
 
-                # Keep a detailed but bounded collision representation. This is
-                # what lets the LLM/compiler see actual human micro-structure
-                # instead of only min/max solid summaries.
                 non_solids = [
                     item for item in geometry_cells if item["category"] != "solid"
-                ][:48]
+                ][:64]
                 solid_cells = [
                     item for item in geometry_cells if item["category"] == "solid"
                 ]
-                if len(solid_cells) > 128:
+                if len(solid_cells) > 180:
                     last = len(solid_cells) - 1
                     solid_cells = [
-                        solid_cells[round(index * last / 127)]
-                        for index in range(128)
+                        solid_cells[round(index * last / 179)]
+                        for index in range(180)
                     ]
 
                 geometry_cells = sorted(
                     solid_cells + non_solids,
                     key=lambda item: (
-                        int(item["beat_eighth"]),
-                        int(item["y_step"]),
+                        float(item["beat_offset"]),
+                        float(item["relative_y"]),
                         str(item["category"]),
                     ),
                 )
 
-                entry_cells = [
-                    int(item["y_step"])
+                entry_offsets = [
+                    float(item["relative_y"])
                     for item in geometry_cells
-                    if int(item["beat_eighth"]) <= 8
+                    if float(item["beat_offset"]) <= 0.75
                     and item["category"] == "solid"
                 ]
-                exit_cells = [
-                    int(item["y_step"])
+                exit_offsets = [
+                    float(item["relative_y"])
                     for item in geometry_cells
-                    if int(item["beat_eighth"]) >= int(chunk_beats * 8) - 8
+                    if float(item["beat_offset"]) >= chunk_beats - 0.75
                     and item["category"] == "solid"
                 ]
 
-                entry_y_step = round(median(entry_cells)) if entry_cells else 0
-                exit_y_step = round(median(exit_cells)) if exit_cells else 0
-                vertical_span_steps = (
-                    max(int(item["y_step"]) for item in geometry_cells)
-                    - min(int(item["y_step"]) for item in geometry_cells)
-                    if geometry_cells
-                    else 0
+                entry_y_offset = (
+                    round(float(median(entry_offsets)), 2)
+                    if entry_offsets
+                    else 0.0
                 )
+                exit_y_offset = (
+                    round(float(median(exit_offsets)), 2)
+                    if exit_offsets
+                    else 0.0
+                )
+                vertical_span = (
+                    max(float(item["relative_y"]) for item in geometry_cells)
+                    - min(float(item["relative_y"]) for item in geometry_cells)
+                    if geometry_cells
+                    else 0.0
+                )
+                source_seconds_per_beat = _source_seconds_per_beat(mode_objects)
 
                 onset_values = [
                     value
@@ -442,9 +561,14 @@ def extract_reference_chunks(
                         "events": events,
                         "solid_profile": solid_profile[:16],
                         "geometry_cells": geometry_cells,
-                        "entry_y_step": entry_y_step,
-                        "exit_y_step": exit_y_step,
-                        "vertical_span_steps": vertical_span_steps,
+                        "entry_y_offset": entry_y_offset,
+                        "exit_y_offset": exit_y_offset,
+                        "vertical_span": round(vertical_span, 2),
+                        "source_seconds_per_beat": source_seconds_per_beat,
+                        "transplant_safe": True,
+                        "entry_y_step": round(entry_y_offset / 15.0),
+                        "exit_y_step": round(exit_y_offset / 15.0),
+                        "vertical_span_steps": round(vertical_span / 15.0),
                     }
                 )
 
@@ -457,6 +581,27 @@ def extract_reference_chunks(
 def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
     if chunk.get("mode") != request.mode:
         return -1_000_000.0
+    if not bool(chunk.get("transplant_safe", False)):
+        return -1_000_000.0
+
+    entry = chunk.get("entry")
+    if not isinstance(entry, dict):
+        return -1_000_000.0
+    if entry.get("gravity") != request.entry_gravity:
+        return -1_000_000.0
+    if bool(entry.get("mini", False)) != request.entry_mini:
+        return -1_000_000.0
+    if entry.get("speed") != request.entry_speed:
+        return -1_000_000.0
+
+    source_spb = float(chunk.get("source_seconds_per_beat", 0.0) or 0.0)
+    if request.seconds_per_beat > 0.0 and source_spb > 0.0:
+        timing_ratio = max(
+            source_spb / request.seconds_per_beat,
+            request.seconds_per_beat / source_spb,
+        )
+        if timing_ratio > 1.22:
+            return -1_000_000.0
 
     score = 8.0
 
@@ -468,14 +613,14 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
     chunk_intensity = float(chunk.get("intensity", 0.0) or 0.0)
     score += max(0.0, 2.0 - abs(chunk_intensity - request.energy) * 3.0)
 
-    entry = chunk.get("entry")
-    if isinstance(entry, dict):
-        if entry.get("gravity") == request.entry_gravity:
-            score += 0.8
-        if bool(entry.get("mini", False)) == request.entry_mini:
-            score += 0.5
-        if entry.get("speed") == request.entry_speed:
-            score += 0.4
+    score += 1.7
+
+    if request.seconds_per_beat > 0.0 and source_spb > 0.0:
+        timing_ratio = max(
+            source_spb / request.seconds_per_beat,
+            request.seconds_per_beat / source_spb,
+        )
+        score += max(0.0, 2.0 - (timing_ratio - 1.0) * 10.0)
 
     event_count = int(chunk.get("interaction_count", 0) or 0)
     score += min(event_count, 16) * 0.08
@@ -535,9 +680,10 @@ def build_planner_prompt(
             "interaction_count": reference.get("interaction_count"),
             "solid_count": reference.get("solid_count"),
             "intensity": reference.get("intensity"),
-            "entry_y_step": reference.get("entry_y_step"),
-            "exit_y_step": reference.get("exit_y_step"),
-            "vertical_span_steps": reference.get("vertical_span_steps"),
+            "entry_y_offset": reference.get("entry_y_offset"),
+            "exit_y_offset": reference.get("exit_y_offset"),
+            "vertical_span": reference.get("vertical_span"),
+            "source_seconds_per_beat": reference.get("source_seconds_per_beat"),
             "events": reference.get("events"),
             "geometry_cells": reference.get("geometry_cells"),
         }
@@ -716,6 +862,14 @@ def _analysis_sections(
                     float(_finite_number(group[-1].get("time")) or 0.0),
                     4,
                 ),
+                "seconds_per_beat": round(
+                    (
+                        float(_finite_number(group[-1].get("time")) or 0.0)
+                        - float(_finite_number(group[0].get("time")) or 0.0)
+                    )
+                    / max(1, len(group) - 1),
+                    5,
+                ),
             }
         )
 
@@ -727,6 +881,8 @@ def _layout_reference_set(
     *,
     difficulty: str,
     average_energy: float,
+    seconds_per_beat: float,
+    entry_speed: str,
 ) -> list[dict[str, Any]]:
     references: list[dict[str, Any]] = []
     used_ids: set[str] = set()
@@ -747,7 +903,8 @@ def _layout_reference_set(
                 beats=4.0,
                 energy=target_energy,
                 onset=target_energy,
-                entry_speed="fast",
+                entry_speed=entry_speed,
+                seconds_per_beat=seconds_per_beat,
             )
 
             for chunk in retrieve_reference_chunks(chunks, request, limit=3):
@@ -773,16 +930,23 @@ def build_layout_prompt(
     *,
     difficulty: str,
     song_offset: float = 0.0,
+    entry_speed: str = "normal",
 ) -> tuple[str, int, list[dict[str, Any]]]:
     sections = _analysis_sections(analysis, song_offset=song_offset)
     if not sections:
         raise ValueError("No song sections were available for planning")
 
     average_energy = mean(section["energy"] for section in sections)
+    average_seconds_per_beat = mean(
+        float(section["seconds_per_beat"])
+        for section in sections
+    )
     references = _layout_reference_set(
         chunks,
         difficulty=difficulty,
         average_energy=average_energy,
+        seconds_per_beat=average_seconds_per_beat,
+        entry_speed=entry_speed,
     )
 
     compact_references = [
@@ -904,6 +1068,24 @@ def _validate_layout_plan(
             )
         previous_reference_pair = reference_pair
 
+        first_reference = references_by_id.get(reference_pair[0])
+        second_reference = references_by_id.get(reference_pair[1])
+        if not isinstance(first_reference, dict) or not isinstance(second_reference, dict):
+            raise RuntimeError(
+                f"Section {expected_index} is missing human reference data"
+            )
+
+        first_entry = first_reference.get("entry")
+        second_entry = second_reference.get("entry")
+        if not isinstance(first_entry, dict) or not isinstance(second_entry, dict):
+            raise RuntimeError(
+                f"Section {expected_index} has incomplete reference state"
+            )
+        if first_entry.get("speed") != second_entry.get("speed"):
+            raise RuntimeError(
+                f"Section {expected_index} tried to stitch different speed states"
+            )
+
         for reference_id in reference_ids:
             reference = references_by_id.get(str(reference_id))
             if reference is None:
@@ -983,50 +1165,58 @@ def _attach_reference_render_sections(
         if len(reference_ids) != 2:
             continue
 
+        first_reference = chunks_by_id.get(reference_ids[0])
+        second_reference = chunks_by_id.get(reference_ids[1])
+        if not isinstance(first_reference, dict) or not isinstance(second_reference, dict):
+            continue
+
+        first_entry = float(first_reference.get("entry_y_offset", 0.0) or 0.0)
+        first_exit = float(first_reference.get("exit_y_offset", 0.0) or 0.0)
+        second_entry = float(second_reference.get("entry_y_offset", 0.0) or 0.0)
+        second_exit = float(second_reference.get("exit_y_offset", 0.0) or 0.0)
+
+        # Critical stitching rule: move the second human chunk so its original
+        # entry route meets the first human chunk's original exit route.
+        second_y_shift = first_exit - second_entry
+
         render_objects: list[dict[str, Any]] = []
-        entry_y_step = 0
-        exit_y_step = 0
-        source_levels: list[str] = []
 
-        for half_index, reference_id in enumerate(reference_ids):
-            reference = chunks_by_id.get(reference_id)
-            if not isinstance(reference, dict):
-                continue
-
-            source_levels.append(str(reference.get("level", "")))
-            if half_index == 0:
-                entry_y_step = int(reference.get("entry_y_step", 0) or 0)
-            else:
-                exit_y_step = int(reference.get("exit_y_step", 0) or 0)
+        for half_index, reference in enumerate((first_reference, second_reference)):
+            y_shift = 0.0 if half_index == 0 else second_y_shift
 
             for item in reference.get("geometry_cells", []):
                 if not isinstance(item, dict):
                     continue
 
-                beat_eighth = int(item.get("beat_eighth", 0) or 0)
-                beat = half_index * 4.0 + beat_eighth / 8.0
-                if beat < half_index * 4.0 or beat > (half_index + 1) * 4.0:
+                beat_offset = _finite_number(item.get("beat_offset"))
+                relative_y = _finite_number(item.get("relative_y"))
+                if beat_offset is None or relative_y is None:
+                    continue
+                if beat_offset < 0.0 or beat_offset > 4.0:
                     continue
 
                 render_objects.append(
                     {
-                        "beat": round(beat, 3),
-                        "y_step": int(item.get("y_step", 0) or 0),
+                        "beat": round(half_index * 4.0 + beat_offset, 4),
+                        "relative_y": round(relative_y + y_shift, 2),
                         "category": str(item.get("category", "")),
                         "object_id": int(item.get("object_id", 0) or 0),
-                        "rotation": int(item.get("rotation", 0) or 0),
+                        "rotation": float(item.get("rotation", 0.0) or 0.0),
+                        "scale_x": float(item.get("scale_x", 1.0) or 1.0),
+                        "scale_y": float(item.get("scale_y", 1.0) or 1.0),
                     }
                 )
 
-        # Do not preserve duplicate collision cells created by editor layering.
         unique: dict[tuple[Any, ...], dict[str, Any]] = {}
         for item in render_objects:
             key = (
-                round(float(item["beat"]) * 8),
-                int(item["y_step"]),
+                round(float(item["beat"]), 3),
+                round(float(item["relative_y"]), 1),
                 str(item["category"]),
                 int(item["object_id"]),
-                int(item["rotation"]),
+                round(float(item["rotation"]), 2),
+                round(float(item["scale_x"]), 3),
+                round(float(item["scale_y"]), 3),
             )
             unique.setdefault(key, item)
 
@@ -1034,24 +1224,35 @@ def _attach_reference_render_sections(
             unique.values(),
             key=lambda item: (
                 float(item["beat"]),
-                int(item["y_step"]),
+                float(item["relative_y"]),
                 str(item["category"]),
             ),
+        )
+
+        entry_state = first_reference.get("entry")
+        entry_speed = (
+            str(entry_state.get("speed", "normal"))
+            if isinstance(entry_state, dict)
+            else "normal"
         )
 
         render_sections.append(
             {
                 "index": int(section.get("index", 0) or 0),
                 "mode": str(section.get("mode", "cube")),
-                "entry_y_step": entry_y_step,
-                "exit_y_step": exit_y_step,
+                "entry_y_offset": round(first_entry, 2),
+                "exit_y_offset": round(second_exit + second_y_shift, 2),
+                "entry_speed": entry_speed,
                 "source_chunk_ids": reference_ids,
-                "source_levels": source_levels,
+                "source_levels": [
+                    str(first_reference.get("level", "")),
+                    str(second_reference.get("level", "")),
+                ],
                 "objects": render_objects,
             }
         )
 
-    plan["render_strategy"] = "human_chunk_adaptation_v1"
+    plan["render_strategy"] = "human_chunk_adaptation_v2"
     plan["render_sections"] = render_sections
     return plan
 
@@ -1064,6 +1265,7 @@ def request_openai_layout(
     model: str = "gpt-6-luna",
     reasoning_effort: str = "low",
     song_offset: float = 0.0,
+    entry_speed: str = "normal",
     timeout_seconds: float = 90.0,
 ) -> dict[str, Any]:
     api_key = _read_openai_api_key()
@@ -1077,6 +1279,7 @@ def request_openai_layout(
         chunks,
         difficulty=difficulty,
         song_offset=song_offset,
+        entry_speed=entry_speed,
     )
     references_by_id = {
         str(reference.get("id")): reference
@@ -1204,7 +1407,7 @@ def build_or_refresh_reference_library(
     cache_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "source_signature": source_signature,
                 "source_level_count": len(levels),
                 "source_file_count": len(aligned_files),
