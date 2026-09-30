@@ -84,6 +84,15 @@ def test_build_motif_profile_learns_mode_and_difficulty_profiles() -> None:
     assert hard_demon["source_level_count"] == 1
     assert hard_demon["mode_profiles"]["ship"]["interaction_object_count"] == 3
 
+    sequence = profile["mode_sequence_profile"]
+    assert sequence["section_count"] >= 4
+    assert sequence["transition_weights"]["cube"]["ship"] > 0
+    assert sequence["transition_weights"]["cube"]["wave"] > 0
+    assert sequence["recommended_section_chunks"] == 1
+
+    hard_sequence = hard_demon["mode_sequence_profile"]
+    assert hard_sequence["transition_weights"]["cube"]["ship"] == 1.0
+
     assert profile["interaction_weights"]["hazard"] > profile["interaction_weights"]["orb"]
     assert profile["rhythm_gap_sixteenth_weights"]
     assert 2 <= profile["recommended_max_events_per_phrase"] <= 12
