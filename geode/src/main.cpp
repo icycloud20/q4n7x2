@@ -433,13 +433,15 @@ class $modify(GDAIEditorUI, EditorUI) {
             4.0f
         );
 
-        auto learningLine = generation.learnedStructuralProfileLoaded
+        auto learningLine = generation.learnedProfileLoaded
             ? fmt::format(
-                "Learned structure: <cg>{}</c> source levels / <cy>{}</c> 8-beat motifs",
+                "Training profile: <cg>{}</c> levels / <cy>{}</c> cube phrases"
+                " / <co>{}</c> style motifs",
                 generation.learnedSourceLevels,
+                generation.learnedSourcePhrases,
                 generation.learnedMotifCount
             )
-            : std::string("Learned structure: <cr>fallback only</c>");
+            : std::string("Training profile: <cr>fallback only</c>");
 
         FLAlertLayer::create(
             "Gameplay Planner v3.2",
@@ -450,7 +452,7 @@ class $modify(GDAIEditorUI, EditorUI) {
                 "across <cy>{}</c> chunks.\n"
                 "Planned <cg>{}</c> mode sections with <cy>{}</c> form transitions.\n\n"
                 "{}\n"
-                "Phrase/rhythm prior: <cy>{}</c> cube phrases.\n"
+                "Mode cadence and transition order are learned from the target difficulty.\n"
                 "Modes: cube, ship, ball, UFO, wave.",
                 generation.targetDifficulty,
                 generation.targetDifficultyScore * 100.0,
