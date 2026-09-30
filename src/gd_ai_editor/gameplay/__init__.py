@@ -16,8 +16,8 @@ from .profile import build_motif_profile
 __all__ = [
     "PlannerRequest",
     "align_gameplay_export",
-    "build_or_refresh_reference_library",
     "build_motif_profile",
+    "build_or_refresh_reference_library",
     "extract_reference_chunks",
     "load_json",
     "load_reference_library",
