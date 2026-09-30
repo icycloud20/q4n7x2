@@ -1124,6 +1124,9 @@ def _validate_layout_plan(
             raise RuntimeError("Planner returned sections out of order")
 
         mode = str(section.get("mode", ""))
+        if expected_index == 0 and mode != "cube":
+            raise RuntimeError("Section 0 must start in cube mode")
+
         if mode not in allowed_by_mode:
             raise RuntimeError(f"Planner returned unsupported mode {mode!r}")
 
@@ -1152,6 +1155,36 @@ def _validate_layout_plan(
                 f"Section {expected_index} repeated the previous opening pair"
             )
         previous_reference_pair = reference_pair
+
+        for pair_start in range(0, 8, 2):
+            first_reference = references_by_id.get(normalized_ids[pair_start])
+            second_reference = references_by_id.get(normalized_ids[pair_start + 1])
+
+            if not isinstance(first_reference, dict) or not isinstance(second_reference, dict):
+                raise TypeError(
+                    f"Section {expected_index} is missing human pair data"
+                )
+
+            if first_reference.get("level") != second_reference.get("level"):
+                raise RuntimeError(
+                    f"Section {expected_index} pair {pair_start // 2} crosses source levels"
+                )
+
+            first_start = float(first_reference.get("start_beat", 0.0) or 0.0)
+            second_start = float(second_reference.get("start_beat", 0.0) or 0.0)
+            if abs((second_start - first_start) - 1.0) > 0.01:
+                raise RuntimeError(
+                    f"Section {expected_index} pair {pair_start // 2} is not contiguous"
+                )
+
+            if not bool(first_reference.get("safe_entry", False)):
+                raise RuntimeError(
+                    f"Section {expected_index} pair {pair_start // 2} has an unsafe entry"
+                )
+            if not bool(second_reference.get("safe_exit", False)):
+                raise RuntimeError(
+                    f"Section {expected_index} pair {pair_start // 2} has an unsafe exit"
+                )
 
         for reference_id in reference_ids:
             reference = references_by_id.get(str(reference_id))
