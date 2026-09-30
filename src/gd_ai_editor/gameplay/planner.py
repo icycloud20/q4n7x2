@@ -496,6 +496,7 @@ def request_openai_plan(
 def _analysis_sections(
     analysis: dict[str, Any],
     *,
+    song_offset: float = 0.0,
     section_beats: int = 8,
     maximum_sections: int = 15,
 ) -> list[dict[str, Any]]:
@@ -503,11 +504,16 @@ def _analysis_sections(
     if not isinstance(beats, list):
         raise TypeError("Song analysis does not contain a beats array")
 
-    usable = [beat for beat in beats if isinstance(beat, dict)]
+    usable = [
+        beat
+        for beat in beats
+        if isinstance(beat, dict)
+        and (_finite_number(beat.get("time")) or 0.0) >= song_offset + 1.25
+    ]
     if len(usable) < 12:
-        raise ValueError("Song analysis does not contain enough beats")
+        raise ValueError("Song analysis does not contain enough beats after the song offset")
 
-    # Match the Geode generator's four-beat lead-in.
+    # Match the Geode generator's four-beat lead-in after its offset filter.
     usable = usable[4:]
     sections: list[dict[str, Any]] = []
 
@@ -578,8 +584,9 @@ def build_layout_prompt(
     chunks: list[dict[str, Any]],
     *,
     difficulty: str,
+    song_offset: float = 0.0,
 ) -> tuple[str, int]:
-    sections = _analysis_sections(analysis)
+    sections = _analysis_sections(analysis, song_offset=song_offset)
     if not sections:
         raise ValueError("No song sections were available for planning")
 
@@ -641,6 +648,7 @@ def request_openai_layout(
     difficulty: str = "Hard Demon",
     model: str = "gpt-6-luna",
     reasoning_effort: str = "low",
+    song_offset: float = 0.0,
     timeout_seconds: float = 90.0,
 ) -> dict[str, Any]:
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -653,6 +661,7 @@ def request_openai_layout(
         analysis,
         chunks,
         difficulty=difficulty,
+        song_offset=song_offset,
     )
 
     body = {
