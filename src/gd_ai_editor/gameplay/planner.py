@@ -331,11 +331,11 @@ def extract_reference_chunks(
                     beat_eighth = max(
                         0,
                         min(
-                            int(round(chunk_beats * 8)),
-                            int(round((beat - start_beat) * 8)),
+                            round(chunk_beats * 8),
+                            round((beat - start_beat) * 8),
                         ),
                     )
-                    y_step = int(round((y - anchor_y) / 15.0))
+                    y_step = round((y - anchor_y) / 15.0)
                     object_id = int(item.get("object_id", 0) or 0)
                     rotation_value = _finite_number(item.get("rotation")) or 0.0
                     rotation = int(round(rotation_value / 45.0) * 45)
@@ -409,8 +409,8 @@ def extract_reference_chunks(
                     and item["category"] == "solid"
                 ]
 
-                entry_y_step = int(round(median(entry_cells))) if entry_cells else 0
-                exit_y_step = int(round(median(exit_cells))) if exit_cells else 0
+                entry_y_step = round(median(entry_cells)) if entry_cells else 0
+                exit_y_step = round(median(exit_cells)) if exit_cells else 0
                 vertical_span_steps = (
                     max(int(item["y_step"]) for item in geometry_cells)
                     - min(int(item["y_step"]) for item in geometry_cells)
