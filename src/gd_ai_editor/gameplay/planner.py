@@ -987,9 +987,10 @@ def build_layout_prompt(
             "interaction_count": reference.get("interaction_count"),
             "solid_count": reference.get("solid_count"),
             "intensity": reference.get("intensity"),
-            "entry_y_step": reference.get("entry_y_step"),
-            "exit_y_step": reference.get("exit_y_step"),
-            "vertical_span_steps": reference.get("vertical_span_steps"),
+            "entry_y_offset": reference.get("entry_y_offset"),
+            "exit_y_offset": reference.get("exit_y_offset"),
+            "vertical_span": reference.get("vertical_span"),
+            "source_seconds_per_beat": reference.get("source_seconds_per_beat"),
             "events": reference.get("events"),
             "geometry_cells": reference.get("geometry_cells"),
         }
@@ -1008,14 +1009,13 @@ def build_layout_prompt(
         "must select exactly eight reference_ids from HUMAN REFERENCE CHUNKS with "
         "the same mode. Those are real one-beat human gameplay microchunks and the "
         "local compiler will stitch/adapt their actual collision geometry. Only "
-        "choose modes that have enough human references listed below; do "
-        "not invent a mode section without reference support. Pick "
-        "references whose intensity and structure fit the song section, avoid "
-        "reusing the same pair in adjacent sections, and mix source levels when "
-        "possible. The action list is high-level intent; reference geometry is "
-        "the primary visual/gameplay structure. Use all five "
-        "supported modes across the full plan when the level is long enough, but "
-        "do not rotate through them mechanically. Avoid repeating the same concept "
+        "choose a mode only when at least four distinct reference IDs for "
+        "that mode are listed below; do not invent unsupported modes. Pick references "
+        "whose intensity and structure fit the song section, never repeat the same "
+        "microchunk back-to-back, and mix source levels when possible. The action "
+        "list is high-level intent; reference geometry is the primary visual/gameplay "
+        "structure. Use several supported modes when the reference pool supports them, "
+        "but never force coverage. Avoid repeating the same concept "
         "or evenly-spaced obstacle rhythm in adjacent sections. Every orb or pad "
         "must be route-required; optional interactions are forbidden. "
         "Cube actions may use jump/land plus required yellow/pink orbs/pads; do not "
