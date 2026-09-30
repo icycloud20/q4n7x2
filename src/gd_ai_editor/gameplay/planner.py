@@ -338,9 +338,9 @@ def extract_reference_chunks(
                     key = (
                         beat_eighth,
                         y_step,
-                        category if category != "solid" else "solid",
-                        object_id if category != "solid" else 0,
-                        rotation if category != "solid" else 0,
+                        category,
+                        object_id,
+                        rotation,
                     )
                     if key in seen_geometry:
                         continue
@@ -1005,8 +1005,8 @@ def _attach_reference_render_sections(
                 round(float(item["beat"]) * 8),
                 int(item["y_step"]),
                 str(item["category"]),
-                int(item["object_id"]) if item["category"] != "solid" else 0,
-                int(item["rotation"]) if item["category"] != "solid" else 0,
+                int(item["object_id"]),
+                int(item["rotation"]),
             )
             unique.setdefault(key, item)
 
