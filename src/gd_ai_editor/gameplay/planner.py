@@ -14,7 +14,7 @@ from typing import Any
 
 SUPPORTED_MODES = ("cube", "ship", "ball", "ufo", "wave")
 INTERACTION_CATEGORIES = {"hazard", "orb", "pad", "portal"}
-RENDER_CATEGORIES = {"solid", "hazard", "orb", "pad"}
+RENDER_CATEGORIES = {"solid", "hazard", "orb", "pad", "collision"}
 
 PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -594,6 +594,10 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
     if entry.get("speed") != request.entry_speed:
         return -1_000_000.0
 
+    vertical_span_units = float(chunk.get("vertical_span", 0.0) or 0.0)
+    if vertical_span_units > 540.0:
+        return -1_000_000.0
+
     source_spb = float(chunk.get("source_seconds_per_beat", 0.0) or 0.0)
     if request.seconds_per_beat > 0.0 and source_spb > 0.0:
         timing_ratio = max(
@@ -979,7 +983,9 @@ def build_layout_prompt(
         "breathing moments while staying at the target difficulty. Every section "
         "must select exactly two reference_ids from HUMAN REFERENCE CHUNKS with "
         "the same mode. Those are real four-beat human gameplay chunks and the "
-        "local compiler will stitch/adapt their actual collision geometry. Pick "
+        "local compiler will stitch/adapt their actual collision geometry. Only "
+        "choose modes that have at least two human references listed below; do "
+        "not invent a mode section without reference support. Pick "
         "references whose intensity and structure fit the song section, avoid "
         "reusing the same pair in adjacent sections, and mix source levels when "
         "possible. The action list is high-level intent; reference geometry is "
