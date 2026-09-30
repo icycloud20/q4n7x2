@@ -780,6 +780,7 @@ def build_layout_prompt(
 
     compact_references = [
         {
+            "id": reference.get("id"),
             "level": reference.get("level"),
             "difficulty": reference.get("difficulty"),
             "mode": reference.get("mode"),
@@ -787,8 +788,11 @@ def build_layout_prompt(
             "interaction_count": reference.get("interaction_count"),
             "solid_count": reference.get("solid_count"),
             "intensity": reference.get("intensity"),
+            "entry_y_step": reference.get("entry_y_step"),
+            "exit_y_step": reference.get("exit_y_step"),
+            "vertical_span_steps": reference.get("vertical_span_steps"),
             "events": reference.get("events"),
-            "solid_profile": reference.get("solid_profile"),
+            "geometry_cells": reference.get("geometry_cells"),
         }
         for reference in references
     ]
@@ -1180,7 +1184,7 @@ def build_or_refresh_reference_library(
     cache_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "source_signature": source_signature,
                 "source_level_count": len(levels),
                 "source_file_count": len(aligned_files),
@@ -1198,7 +1202,7 @@ def build_or_refresh_reference_library(
 def write_reference_library(path: Path, chunks: list[dict[str, Any]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "chunk_count": len(chunks),
         "chunks": chunks,
     }
