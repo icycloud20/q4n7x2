@@ -89,74 +89,82 @@ def _interaction_objects(
     return result
 
 
-def _mode_profile(interactions: list[dict[str, Any]]) -> dict[str, Any]:
+def _mode_profile(
+    levels: list[dict[str, Any]],
+    *,
+    mode: str,
+) -> dict[str, Any]:
     template_counts: Counter[str] = Counter()
     interaction_counts: Counter[str] = Counter()
     beat_phase_counts: Counter[str] = Counter()
     rhythm_gap_counts: Counter[str] = Counter()
     phrase_cluster_counts: list[int] = []
+    interaction_object_count = 0
 
-    phrases: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    clusters: dict[float, list[dict[str, Any]]] = defaultdict(list)
+    # Keep level boundaries intact. Phrase index 0 from two different levels is
+    # two training phrases, not one combined super-phrase.
+    for level in levels:
+        interactions = _interaction_objects(level, mode=mode)
+        interaction_object_count += len(interactions)
 
-    for item in interactions:
-        category = str(item.get("category"))
-        interaction_counts[category] += 1
+        phrases: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        clusters: dict[float, list[dict[str, Any]]] = defaultdict(list)
 
-        beat = float(item["beat"])
-        phrase_index = math.floor(beat / 4.0)
-        phrases[phrase_index].append(item)
+        for item in interactions:
+            category = str(item.get("category"))
+            interaction_counts[category] += 1
 
-        phase = beat % 1.0
-        quarter = round(phase * 4.0) / 4.0
-        if quarter >= 1.0:
-            quarter = 0.0
-        beat_phase_counts[f"{quarter:.2f}"] += 1
+            beat = float(item["beat"])
+            phrase_index = math.floor(beat / 4.0)
+            phrases[phrase_index].append(item)
 
-        cluster_beat = round(beat * 16.0) / 16.0
-        clusters[cluster_beat].append(item)
+            phase = beat % 1.0
+            quarter = round(phase * 4.0) / 4.0
+            if quarter >= 1.0:
+                quarter = 0.0
+            beat_phase_counts[f"{quarter:.2f}"] += 1
 
-    for phrase_objects in phrases.values():
-        categories = tuple(
-            sorted(
-                {
-                    str(item.get("category"))
-                    for item in phrase_objects
-                    if item.get("category") != "portal"
-                }
+            cluster_beat = round(beat * 16.0) / 16.0
+            clusters[cluster_beat].append(item)
+
+        for phrase_objects in phrases.values():
+            categories = tuple(
+                sorted(
+                    {
+                        str(item.get("category"))
+                        for item in phrase_objects
+                        if item.get("category") != "portal"
+                    }
+                )
             )
-        )
-        template = _TEMPLATE_BY_CATEGORIES.get(categories, "mixed")
-        template_counts[template] += 1
+            template = _TEMPLATE_BY_CATEGORIES.get(categories, "mixed")
+            template_counts[template] += 1
 
-    cluster_beats = sorted(clusters)
-    if cluster_beats:
-        phrase_cluster_map: dict[int, int] = Counter(
-            math.floor(beat / 4.0) for beat in cluster_beats
-        )
-        phrase_cluster_counts.extend(phrase_cluster_map.values())
+        cluster_beats = sorted(clusters)
+        if cluster_beats:
+            phrase_cluster_map: dict[int, int] = Counter(
+                math.floor(beat / 4.0) for beat in cluster_beats
+            )
+            phrase_cluster_counts.extend(phrase_cluster_map.values())
 
-    for left, right in pairwise(cluster_beats):
-        gap = right - left
-        if gap <= 0.0 or gap > 1.0:
-            continue
+        for left, right in pairwise(cluster_beats):
+            gap = right - left
+            if gap <= 0.0 or gap > 1.0:
+                continue
 
-        sixteenth_steps = max(1, round(gap * 16.0))
-        rhythm_gap_counts[str(sixteenth_steps)] += 1
+            sixteenth_steps = max(1, round(gap * 16.0))
+            rhythm_gap_counts[str(sixteenth_steps)] += 1
 
     phrase_count = sum(template_counts.values())
     median_clusters = median(phrase_cluster_counts) if phrase_cluster_counts else 0.0
 
-    # Preserve real interaction density much more faithfully than the old
-    # sqrt-compressed cube-only profile. Geometry still gets validated later,
-    # but hard levels should no longer collapse into 2-star sparse gameplay.
     recommended_events = max(
         2,
         min(12, round(max(2.0, float(median_clusters)))),
     )
 
     return {
-        "interaction_object_count": len(interactions),
+        "interaction_object_count": interaction_object_count,
         "phrase_count": phrase_count,
         "template_weights": _normalize(template_counts),
         "interaction_weights": _normalize(interaction_counts),
@@ -165,7 +173,6 @@ def _mode_profile(interactions: list[dict[str, Any]]) -> dict[str, Any]:
         "median_interaction_clusters_per_phrase": round(float(median_clusters), 3),
         "recommended_max_events_per_phrase": recommended_events,
     }
-
 
 def _difficulty_label(level: dict[str, Any]) -> str:
     level_meta = level.get("level")
@@ -212,16 +219,10 @@ def _difficulty_label(level: dict[str, Any]) -> str:
 
 
 def _profiles_for_levels(levels: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    profiles: dict[str, dict[str, Any]] = {}
-
-    for mode in _GAMEPLAY_MODES:
-        interactions: list[dict[str, Any]] = []
-        for level in levels:
-            interactions.extend(_interaction_objects(level, mode=mode))
-
-        profiles[mode] = _mode_profile(interactions)
-
-    return profiles
+    return {
+        mode: _mode_profile(levels, mode=mode)
+        for mode in _GAMEPLAY_MODES
+    }
 
 
 def build_motif_profile(levels: list[dict[str, Any]]) -> dict[str, Any]:
