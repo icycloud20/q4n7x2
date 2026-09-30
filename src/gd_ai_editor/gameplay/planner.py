@@ -877,6 +877,8 @@ def _validate_layout_plan(
         "wave": 5,
     }
 
+    previous_reference_pair: tuple[str, str] | None = None
+
     for expected_index, section in enumerate(sections):
         if not isinstance(section, dict) or section.get("index") != expected_index:
             raise RuntimeError("Planner returned sections out of order")
@@ -890,6 +892,17 @@ def _validate_layout_plan(
             raise RuntimeError(
                 f"Section {expected_index} must select exactly two human references"
             )
+
+        reference_pair = (str(reference_ids[0]), str(reference_ids[1]))
+        if reference_pair[0] == reference_pair[1]:
+            raise RuntimeError(
+                f"Section {expected_index} selected the same human chunk twice"
+            )
+        if previous_reference_pair == reference_pair:
+            raise RuntimeError(
+                f"Section {expected_index} repeated the previous human chunk pair"
+            )
+        previous_reference_pair = reference_pair
 
         for reference_id in reference_ids:
             reference = references_by_id.get(str(reference_id))
