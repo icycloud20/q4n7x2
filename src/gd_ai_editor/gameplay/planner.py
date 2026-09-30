@@ -740,9 +740,32 @@ def build_or_refresh_reference_library(
         except (OSError, json.JSONDecodeError):
             pass
 
+    chosen_levels: dict[str, tuple[dict[str, Any], int, bool]] = {}
+
+    for source_path in aligned_files:
+        level = json.loads(source_path.read_text(encoding="utf-8"))
+        metadata = level.get("level")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        level_name = str(metadata.get("name", source_path.stem))
+        labeled = str(metadata.get("difficulty_label", "Unknown")) != "Unknown"
+        modified = source_path.stat().st_mtime_ns
+
+        previous = chosen_levels.get(level_name)
+        if previous is None:
+            chosen_levels[level_name] = (level, modified, labeled)
+            continue
+
+        _, previous_modified, previous_labeled = previous
+        if (labeled and not previous_labeled) or (
+            labeled == previous_labeled and modified > previous_modified
+        ):
+            chosen_levels[level_name] = (level, modified, labeled)
+
     levels = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in aligned_files
+        value[0]
+        for _, value in sorted(chosen_levels.items())
     ]
     chunks = extract_reference_chunks(levels)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -752,6 +775,7 @@ def build_or_refresh_reference_library(
                 "schema_version": 1,
                 "source_signature": source_signature,
                 "source_level_count": len(levels),
+                "source_file_count": len(aligned_files),
                 "chunk_count": len(chunks),
                 "chunks": chunks,
             },
