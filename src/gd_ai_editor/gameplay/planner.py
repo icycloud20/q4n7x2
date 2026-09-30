@@ -6,10 +6,11 @@ import os
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
-from typing import Any, Iterable
+from typing import Any
 
 SUPPORTED_MODES = ("cube", "ship", "ball", "ufo", "wave")
 INTERACTION_CATEGORIES = {"hazard", "orb", "pad", "portal"}
@@ -475,5 +476,5 @@ def load_reference_library(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     chunks = payload.get("chunks")
     if not isinstance(chunks, list):
-        raise ValueError("Reference library does not contain a chunks array")
+        raise TypeError("Reference library does not contain a chunks array")
     return [chunk for chunk in chunks if isinstance(chunk, dict)]
