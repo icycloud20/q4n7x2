@@ -1,61 +1,202 @@
 {
-  "schema_version": 1,
-  "profile_type": "cube_phrase_prior",
+  "schema_version": 2,
+  "profile_type": "mode_aware_phrase_prior",
   "source_levels": [
+    "1326C 2",
+    "ACC 2",
     "Absolute Zero   2",
+    "Astral Decay  2",
+    "Celestial Inertia 2",
+    "EUOUAE 2",
+    "ILLUSION OF SPACE 2",
+    "LOUD 2",
+    "Moonman Layout",
     "Sakura 2",
     "Seven Seas Layout",
-    "Moonman Layout"
+    "dak 2"
   ],
-  "source_level_count": 4,
-  "source_object_count": 35817,
-  "cube_interaction_object_count": 3698,
-  "cube_phrase_count": 95,
+  "source_level_count": 12,
+  "source_object_count": 173709,
+  "difficulty_distribution": {
+    "Hard Demon": 8,
+    "Unknown": 4
+  },
+  "median_source_difficulty_score": 0.8,
+  "mode_profiles": {
+    "cube": {
+      "interaction_object_count": 19503,
+      "phrase_count": 348,
+      "median_interaction_clusters_per_phrase": 14.0,
+      "recommended_max_events_per_phrase": 12
+    },
+    "ship": {
+      "interaction_object_count": 4760,
+      "phrase_count": 92,
+      "median_interaction_clusters_per_phrase": 14.0,
+      "recommended_max_events_per_phrase": 12
+    },
+    "ball": {
+      "interaction_object_count": 5445,
+      "phrase_count": 140,
+      "median_interaction_clusters_per_phrase": 12.0,
+      "recommended_max_events_per_phrase": 12
+    },
+    "ufo": {
+      "interaction_object_count": 6790,
+      "phrase_count": 114,
+      "median_interaction_clusters_per_phrase": 12.0,
+      "recommended_max_events_per_phrase": 12
+    },
+    "wave": {
+      "interaction_object_count": 1907,
+      "phrase_count": 48,
+      "median_interaction_clusters_per_phrase": 8.0,
+      "recommended_max_events_per_phrase": 8
+    },
+    "robot": {
+      "interaction_object_count": 4560,
+      "phrase_count": 97,
+      "median_interaction_clusters_per_phrase": 9.5,
+      "recommended_max_events_per_phrase": 10
+    },
+    "spider": {
+      "interaction_object_count": 5180,
+      "phrase_count": 96,
+      "median_interaction_clusters_per_phrase": 11.0,
+      "recommended_max_events_per_phrase": 11
+    },
+    "swing": {
+      "interaction_object_count": 21,
+      "phrase_count": 2,
+      "median_interaction_clusters_per_phrase": 7.0,
+      "recommended_max_events_per_phrase": 7
+    }
+  },
+  "mode_sequence_profile": {
+    "supported_modes": [
+      "cube",
+      "ship",
+      "ball",
+      "ufo",
+      "wave"
+    ],
+    "section_count": 469,
+    "mode_weights": {
+      "cube": 0.411514,
+      "ship": 0.138593,
+      "ball": 0.187633,
+      "ufo": 0.183369,
+      "wave": 0.078891
+    },
+    "section_duration_beats": {
+      "cube": {"count": 193, "median": 2.568, "p75": 5.24, "mean": 4.344},
+      "ship": {"count": 65, "median": 2.04, "p75": 3.811, "mean": 3.717},
+      "ball": {"count": 88, "median": 2.222, "p75": 3.816, "mean": 3.047},
+      "ufo": {"count": 86, "median": 1.604, "p75": 2.223, "mean": 2.102},
+      "wave": {"count": 37, "median": 0.945, "p75": 2.47, "mean": 2.083}
+    },
+    "transition_weights": {
+      "cube": {"ship": 0.213904, "ball": 0.336898, "ufo": 0.347594, "wave": 0.101604},
+      "ship": {"cube": 0.683333, "ball": 0.183333, "ufo": 0.033333, "wave": 0.1},
+      "ball": {"cube": 0.62069, "ship": 0.103448, "ufo": 0.195402, "wave": 0.08046},
+      "ufo": {"cube": 0.744186, "ship": 0.081395, "ball": 0.127907, "wave": 0.046512},
+      "wave": {"cube": 0.648649, "ship": 0.243243, "ball": 0.081081, "ufo": 0.027027}
+    },
+    "overall_median_section_beats": 1.981,
+    "overall_p75_section_beats": 3.942,
+    "recommended_section_chunks": 1
+  },
+  "difficulty_profiles": {
+    "Hard Demon": {
+      "source_level_count": 8,
+      "mode_profiles": {
+        "cube": {"interaction_object_count": 15805, "phrase_count": 253, "median_interaction_clusters_per_phrase": 17.0, "recommended_max_events_per_phrase": 12},
+        "ship": {"interaction_object_count": 3839, "phrase_count": 67, "median_interaction_clusters_per_phrase": 16.0, "recommended_max_events_per_phrase": 12},
+        "ball": {"interaction_object_count": 4573, "phrase_count": 100, "median_interaction_clusters_per_phrase": 14.0, "recommended_max_events_per_phrase": 12},
+        "ufo": {"interaction_object_count": 4898, "phrase_count": 63, "median_interaction_clusters_per_phrase": 15.0, "recommended_max_events_per_phrase": 12},
+        "wave": {"interaction_object_count": 1668, "phrase_count": 35, "median_interaction_clusters_per_phrase": 8.5, "recommended_max_events_per_phrase": 8},
+        "robot": {"interaction_object_count": 3581, "phrase_count": 57, "median_interaction_clusters_per_phrase": 14.0, "recommended_max_events_per_phrase": 12},
+        "spider": {"interaction_object_count": 4007, "phrase_count": 68, "median_interaction_clusters_per_phrase": 13.5, "recommended_max_events_per_phrase": 12},
+        "swing": {"interaction_object_count": 0, "phrase_count": 0, "median_interaction_clusters_per_phrase": 0.0, "recommended_max_events_per_phrase": 2}
+      },
+      "mode_sequence_profile": {
+        "supported_modes": ["cube", "ship", "ball", "ufo", "wave"],
+        "section_count": 343,
+        "mode_weights": {
+          "cube": 0.422741,
+          "ship": 0.148688,
+          "ball": 0.195335,
+          "ufo": 0.154519,
+          "wave": 0.078717
+        },
+        "section_duration_beats": {
+          "cube": {"count": 145, "median": 2.203, "p75": 5.077, "mean": 4.084},
+          "ship": {"count": 51, "median": 2.04, "p75": 4.102, "mean": 3.848},
+          "ball": {"count": 67, "median": 1.963, "p75": 3.026, "mean": 2.928},
+          "ufo": {"count": 53, "median": 1.344, "p75": 2.056, "mean": 1.973},
+          "wave": {"count": 27, "median": 0.927, "p75": 2.575, "mean": 1.853}
+        },
+        "transition_weights": {
+          "cube": {"ship": 0.253521, "ball": 0.352113, "ufo": 0.295775, "wave": 0.098592},
+          "ship": {"cube": 0.659574, "ball": 0.191489, "ufo": 0.021277, "wave": 0.12766},
+          "ball": {"cube": 0.712121, "ship": 0.106061, "ufo": 0.136364, "wave": 0.045455},
+          "ufo": {"cube": 0.792453, "ship": 0.037736, "ball": 0.09434, "wave": 0.075472},
+          "wave": {"cube": 0.666667, "ship": 0.222222, "ball": 0.111111}
+        },
+        "overall_median_section_beats": 1.902,
+        "overall_p75_section_beats": 3.84,
+        "recommended_section_chunks": 1
+      }
+    }
+  },
+  "cube_interaction_object_count": 19503,
+  "cube_phrase_count": 348,
   "template_weights": {
-    "hazard_only": 0.073684,
-    "hazard_orb": 0.073684,
-    "hazard_orb_pad": 0.315789,
-    "hazard_pad": 0.073684,
-    "mixed": 0.157895,
-    "orb_only": 0.105263,
-    "pad_only": 0.147368,
-    "quiet": 0.052632
+    "hazard_only": 0.12931,
+    "hazard_orb": 0.224138,
+    "hazard_orb_pad": 0.399425,
+    "hazard_pad": 0.077586,
+    "mixed": 0.043103,
+    "orb_only": 0.037356,
+    "pad_only": 0.048851,
+    "quiet": 0.04023
   },
   "interaction_weights": {
-    "hazard": 0.822877,
-    "orb": 0.036777,
-    "pad": 0.073553,
-    "portal": 0.066793
+    "hazard": 0.858637,
+    "orb": 0.032559,
+    "pad": 0.059119,
+    "portal": 0.049685
   },
   "quarter_beat_phase_weights": {
-    "0.00": 0.24662,
-    "0.25": 0.254462,
-    "0.50": 0.237155,
-    "0.75": 0.261763
+    "0.00": 0.262472,
+    "0.25": 0.243757,
+    "0.50": 0.236528,
+    "0.75": 0.257242
   },
   "rhythm_gap_sixteenth_weights": {
-    "1": 0.544517,
-    "10": 0.009372,
-    "11": 0.00656,
-    "12": 0.005623,
-    "13": 0.002812,
-    "14": 0.002812,
-    "15": 0.000937,
-    "16": 0.003749,
-    "2": 0.185567,
-    "3": 0.116214,
-    "4": 0.052484,
-    "5": 0.020619,
-    "6": 0.018744,
-    "7": 0.011246,
-    "8": 0.009372,
-    "9": 0.009372
+    "1": 0.63453,
+    "2": 0.182901,
+    "3": 0.079544,
+    "4": 0.038035,
+    "5": 0.022821,
+    "6": 0.012899,
+    "7": 0.00678,
+    "8": 0.004465,
+    "9": 0.0043,
+    "10": 0.0043,
+    "11": 0.002481,
+    "12": 0.001488,
+    "13": 0.001158,
+    "14": 0.001488,
+    "15": 0.001654,
+    "16": 0.001158
   },
-  "median_interaction_clusters_per_phrase": 6.0,
-  "recommended_max_events_per_phrase": 2,
+  "median_interaction_clusters_per_phrase": 14.0,
+  "recommended_max_events_per_phrase": 12,
   "notes": [
-    "Profile is learned from aligned editor exports, not replay inputs.",
-    "Raw editor density is compressed before generation because exported levels include stacked/off-path collision objects.",
-    "Replay capture will be needed before the model can learn exact player inputs and required interaction paths."
+    "Retrained from 12 aligned levels: 8 manually labeled Hard Demon plus 4 original style/reference levels.",
+    "Hard Demon mode-specific density and mode-transition priors are preferred at runtime.",
+    "Seven Seas Layout and Moonman Layout remain the primary structural/style anchors; the larger batch supplies difficulty and mode statistics.",
+    "Exact mandatory inputs still require the trajectory/replay solver planned for the next stage."
   ]
 }
