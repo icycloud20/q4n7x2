@@ -684,14 +684,14 @@ def _validate_layout_plan(plan: dict[str, Any], expected_sections: int) -> None:
 
         actions = section.get("actions")
         if not isinstance(actions, list):
-            raise RuntimeError(f"Section {expected_index} has no action list")
+            raise TypeError(f"Section {expected_index} has no action list")
 
         primary_actions = 0
         previous_beat = -1.0
 
         for action in actions:
             if not isinstance(action, dict):
-                raise RuntimeError(f"Section {expected_index} contains an invalid action")
+                raise TypeError(f"Section {expected_index} contains an invalid action")
 
             action_name = str(action.get("action", ""))
             beat = _finite_number(action.get("beat"))
@@ -713,10 +713,9 @@ def _validate_layout_plan(plan: dict[str, Any], expected_sections: int) -> None:
             if action_name != "mode_portal":
                 primary_actions += 1
 
-            if (
-                action_name.startswith("orb_")
-                or action_name.startswith("pad_")
-            ) and not bool(action.get("required", False)):
+            if action_name.startswith(("orb_", "pad_")) and not bool(
+                action.get("required", False)
+            ):
                 raise RuntimeError(
                     f"Section {expected_index} contains an optional orb/pad"
                 )
