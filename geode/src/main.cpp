@@ -547,18 +547,6 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto apiKey = std::getenv("OPENAI_API_KEY");
-        if (!apiKey || std::string(apiKey).empty()) {
-            finishEarly();
-            FLAlertLayer::create(
-                "Luna Planner Needs API Key",
-                "Set <cy>OPENAI_API_KEY</c> in Windows, restart Geometry Dash, "
-                "then press Generate again.<br><br>The key is never stored in the level or repository.",
-                "OK"
-            )->show();
-            return;
-        }
-
         auto backendPath =
             Mod::get()->getResourcesDir() / "gd-ai-backend.exe";
         if (!std::filesystem::exists(backendPath)) {
