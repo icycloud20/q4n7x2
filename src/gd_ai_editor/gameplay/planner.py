@@ -589,8 +589,8 @@ def extract_reference_chunks(
                         "exit_y_offset": exit_y_offset,
                         "safe_entry": (
                             not any(
-                                item["category"] == "hazard"
-                                and float(item["beat_offset"]) <= 0.18
+                                item["category"] in {"hazard", "orb", "pad"}
+                                and float(item["beat_offset"]) <= 0.35
                                 for item in geometry_cells
                             )
                             and (
