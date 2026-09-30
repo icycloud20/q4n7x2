@@ -38,6 +38,24 @@
         "Insane Demon",
         "Extreme Demon"
       ]
+    },
+    "training-difficulty-override": {
+      "type": "string",
+      "name": "Training Difficulty Override",
+      "description": "Difficulty label written into gameplay exports. Leave on Auto when the copied level keeps its rating metadata; set this manually for batches if it does not.",
+      "default": "Auto from level",
+      "one-of": [
+        "Auto from level",
+        "Normal",
+        "Hard",
+        "Harder",
+        "Insane",
+        "Easy Demon",
+        "Medium Demon",
+        "Hard Demon",
+        "Insane Demon",
+        "Extreme Demon"
+      ]
     }
   }
 }
