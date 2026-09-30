@@ -20,5 +20,24 @@
     "files": [
       "resources/*"
     ]
+  },
+  "settings": {
+    "target-difficulty": {
+      "type": "string",
+      "name": "Target Difficulty",
+      "description": "Difficulty target used by the gameplay planner. Hard Demon is the default training goal.",
+      "default": "Hard Demon",
+      "one-of": [
+        "Normal",
+        "Hard",
+        "Harder",
+        "Insane",
+        "Easy Demon",
+        "Medium Demon",
+        "Hard Demon",
+        "Insane Demon",
+        "Extreme Demon"
+      ]
+    }
   }
 }
