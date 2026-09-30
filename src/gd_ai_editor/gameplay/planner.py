@@ -930,6 +930,16 @@ def _layout_reference_set(
     references: list[dict[str, Any]] = []
     used_ids: set[str] = set()
 
+    neighbor_index: dict[tuple[str, str, float], dict[str, Any]] = {}
+    for chunk in chunks:
+        neighbor_index[
+            (
+                str(chunk.get("level", "")),
+                str(chunk.get("mode", "")),
+                round(float(chunk.get("start_beat", 0.0) or 0.0), 3),
+            )
+        ] = chunk
+
     energy_targets = (
         max(0.25, average_energy - 0.25),
         average_energy,
@@ -950,17 +960,30 @@ def _layout_reference_set(
                 seconds_per_beat=seconds_per_beat,
             )
 
-            for chunk in retrieve_reference_chunks(chunks, request, limit=8):
-                chunk_id = str(chunk.get("id", ""))
-                if not chunk_id or chunk_id in used_ids:
+            for seed in retrieve_reference_chunks(chunks, request, limit=12):
+                level_name = str(seed.get("level", ""))
+                start_beat = round(float(seed.get("start_beat", 0.0) or 0.0), 3)
+                neighbor = neighbor_index.get(
+                    (level_name, mode, round(start_beat + 1.0, 3))
+                )
+                if not isinstance(neighbor, dict):
                     continue
-                used_ids.add(chunk_id)
-                mode_references.append(chunk)
+                if not bool(seed.get("safe_entry", False)):
+                    continue
+                if not bool(neighbor.get("safe_exit", False)):
+                    continue
 
-                if len(mode_references) >= 14:
+                for chunk in (seed, neighbor):
+                    chunk_id = str(chunk.get("id", ""))
+                    if not chunk_id or chunk_id in used_ids:
+                        continue
+                    used_ids.add(chunk_id)
+                    mode_references.append(chunk)
+
+                if len(mode_references) >= 20:
                     break
 
-            if len(mode_references) >= 14:
+            if len(mode_references) >= 20:
                 break
 
         references.extend(mode_references)
