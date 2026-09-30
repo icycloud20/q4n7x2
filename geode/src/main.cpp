@@ -716,14 +716,16 @@ class $modify(GDAIEditorUI, EditorUI) {
                     fmt::format(
                         "Model: <cg>{}</c>\n"
                         "Compiled <cy>{}</c> objects and <co>{}</c> gameplay interactions.\n"
-                        "Sections: <cg>{}</c> / mode transitions: <cy>{}</c>.\n\n"
-                        "This build uses the LLM for action/rhythm composition and "
-                        "the local compiler for exact GD object placement.",
+                        "Sections: <cg>{}</c> / mode transitions: <cy>{}</c>.\n"
+                        "Human-reference geometry: <cg>{}</c> sections.\n\n"
+                        "Luna selects/composes real training chunks; the local compiler "
+                        "re-anchors their collision geometry to the new song.",
                         model,
                         generation.createdObjects,
                         generation.gameplayEvents,
                         generation.sections,
-                        generation.modeTransitions
+                        generation.modeTransitions,
+                        generation.humanReferenceSections
                     ),
                     "OK"
                 )->show();
