@@ -143,6 +143,47 @@ std::string objectCategory(GameObjectType type) {
     return "other";
 }
 
+std::string levelDifficultyLabel(GJGameLevel* level) {
+    if (!level) {
+        return "Unknown";
+    }
+
+    int stars = level->m_stars.value();
+    bool isDemon = level->m_demon.value() > 0 || stars == 10;
+
+    if (isDemon) {
+        switch (level->m_demonDifficulty) {
+            case 3: return "Easy Demon";
+            case 4: return "Medium Demon";
+            case 0: return "Hard Demon";
+            case 5: return "Insane Demon";
+            case 6: return "Extreme Demon";
+            default: return "Hard Demon";
+        }
+    }
+
+    if (stars <= 0) {
+        return "Unknown";
+    }
+    if (stars <= 2) {
+        return "Easy";
+    }
+    if (stars == 3) {
+        return "Normal";
+    }
+    if (stars <= 5) {
+        return "Hard";
+    }
+    if (stars <= 7) {
+        return "Harder";
+    }
+    if (stars <= 9) {
+        return "Insane";
+    }
+
+    return "Unknown";
+}
+
 std::string modifierNameForID(int objectID) {
     switch (objectID) {
         case 200: return "speed_slow";
@@ -325,6 +366,11 @@ GameplayExportResult exportGameplayTimeline(
     levelJson["start_dual"] = settings ? settings->m_startDual : false;
     levelJson["start_mirror"] = settings ? settings->m_mirrorMode : false;
     levelJson["reverse_gameplay"] = settings ? settings->m_reverseGameplay : false;
+    levelJson["stars"] = level->m_stars.value();
+    levelJson["is_demon"] = level->m_demon.value() > 0;
+    levelJson["demon_difficulty"] = level->m_demonDifficulty;
+    levelJson["difficulty_enum"] = static_cast<int>(level->m_difficulty);
+    levelJson["difficulty_label"] = levelDifficultyLabel(level);
     root["level"] = levelJson;
 
     auto summary = matjson::Value::object();
