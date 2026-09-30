@@ -6,9 +6,11 @@
 
 #include "BaselineGenerator.hpp"
 #include "GameplayExport.hpp"
+#include "LlmGenerator.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #ifdef GEODE_IS_WINDOWS
 #include <Windows.h>
 #endif
@@ -24,6 +26,7 @@ using namespace geode::prelude;
 namespace {
 std::atomic_bool g_analysisRunning = false;
 std::atomic_bool g_exportRunning = false;
+std::atomic_bool g_generationRunning = false;
 
 std::filesystem::path findExistingFile(std::vector<std::filesystem::path> const& candidates) {
     std::error_code error;
@@ -265,6 +268,43 @@ int runGameplayAlignProcess(
             analysisPath.wstring(),
             L"--out",
             alignedGameplayPath.wstring(),
+        },
+        backendPath.parent_path(),
+        logPath
+    );
+}
+
+int runLlmPlanProcess(
+    std::filesystem::path const& backendPath,
+    std::filesystem::path const& analysisPath,
+    std::filesystem::path const& trainingDirectory,
+    std::filesystem::path const& cachePath,
+    std::filesystem::path const& planPath,
+    std::filesystem::path const& logPath,
+    std::string const& difficulty,
+    std::string const& model,
+    std::string const& reasoningEffort,
+    double songOffset
+) {
+    return runWindowsCommand(
+        {
+            backendPath.wstring(),
+            L"gameplay",
+            L"plan-layout",
+            analysisPath.wstring(),
+            trainingDirectory.wstring(),
+            L"--cache",
+            cachePath.wstring(),
+            L"--out",
+            planPath.wstring(),
+            L"--difficulty",
+            std::filesystem::path(difficulty).wstring(),
+            L"--song-offset",
+            std::filesystem::path(fmt::format("{:.6f}", songOffset)).wstring(),
+            L"--model",
+            std::filesystem::path(model).wstring(),
+            L"--reasoning-effort",
+            std::filesystem::path(reasoningEffort).wstring(),
         },
         backendPath.parent_path(),
         logPath
