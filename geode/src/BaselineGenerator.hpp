@@ -15,6 +15,8 @@ struct BaselineGenerationResult {
     std::size_t gameplayEvents = 0;
     std::size_t structuredBlocks = 0;
     std::size_t phraseCount = 0;
+    std::size_t modeSections = 0;
+    std::size_t modeTransitions = 0;
     std::size_t learnedSourceLevels = 0;
     std::size_t learnedSourcePhrases = 0;
     std::size_t learnedMotifCount = 0;
