@@ -113,6 +113,14 @@ jobs:
               if (-not $_) { throw "Gameplay alignment output does not contain beat coordinates" }
           }
 
+          & "backend-dist\gd-ai-backend.exe" gameplay plan-layout "backend-build\smoke.json" "backend-build" --cache "backend-build\human-chunks.json" --out "backend-build\planner-dry-run.json" --dry-run
+          if ($LASTEXITCODE -ne 0) {
+              throw "Standalone LLM planner dry-run failed with exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path "backend-build\planner-dry-run.json")) {
+              throw "Standalone backend did not create planner-dry-run.json"
+          }
+
       - name: Build Geode mod
         id: geode-build
         uses: geode-sdk/build-geode-mod@main
