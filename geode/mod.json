@@ -60,7 +60,7 @@
     "llm-planner-enabled": {
       "type": "bool",
       "name": "Use LLM Gameplay Planner",
-      "description": "Use GPT-6 Luna to plan action timing from your local training exports. Requires OPENAI_API_KEY in the environment.",
+      "description": "Use GPT-6 Luna to plan action timing from compact summaries of your local training exports. Song features and a few retrieved chunk summaries are sent to OpenAI. Requires OPENAI_API_KEY.",
       "default": false
     },
     "planner-model": {
