@@ -6,10 +6,16 @@ from pathlib import Path
 
 from gd_ai_editor.audio import analyze_audio, write_beat_preview
 from gd_ai_editor.gameplay import (
+    PlannerRequest,
     align_gameplay_export,
     build_motif_profile,
+    extract_reference_chunks,
     load_json,
+    load_reference_library,
+    request_openai_plan,
+    retrieve_reference_chunks,
     write_json,
+    write_reference_library,
 )
 
 
@@ -137,6 +143,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the learned motif-profile JSON file",
     )
 
+    chunks_parser = gameplay_commands.add_parser(
+        "chunks",
+        help="Build a compact human-reference chunk library from aligned exports",
+    )
+    chunks_parser.add_argument("aligned_files", nargs="+", type=Path)
+    chunks_parser.add_argument("--out", type=Path, required=True)
+    chunks_parser.add_argument("--chunk-beats", type=float, default=4.0)
+    chunks_parser.add_argument("--stride-beats", type=float, default=2.0)
+
+    plan_parser = gameplay_commands.add_parser(
+        "plan",
+        help="Plan one gameplay section with retrieved human examples + GPT-6 Luna",
+    )
+    plan_parser.add_argument("reference_library", type=Path)
+    plan_parser.add_argument("--mode", choices=("cube", "ship", "ball", "ufo", "wave"), required=True)
+    plan_parser.add_argument("--difficulty", default="Hard Demon")
+    plan_parser.add_argument("--beats", type=float, default=4.0)
+    plan_parser.add_argument("--energy", type=float, default=0.8)
+    plan_parser.add_argument("--onset", type=float, default=0.8)
+    plan_parser.add_argument("--entry-gravity", default="normal")
+    plan_parser.add_argument("--entry-speed", default="normal")
+    plan_parser.add_argument("--entry-mini", action="store_true")
+    plan_parser.add_argument("--previous-mode", default="cube")
+    plan_parser.add_argument("--references", type=int, default=5)
+    plan_parser.add_argument("--model", default="gpt-6-luna")
+    plan_parser.add_argument("--reasoning-effort", default="low")
+    plan_parser.add_argument("--out", type=Path, required=True)
+    plan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Write retrieved examples/request metadata without calling OpenAI",
+    )
+
     return parser
 
 
@@ -194,6 +233,65 @@ def main() -> None:
                 f"{mode}: {mode_profile.get('phrase_count', 0)} phrases / "
                 f"{mode_profile.get('interaction_object_count', 0)} interactions"
             )
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "chunks":
+        levels = [load_json(path) for path in arguments.aligned_files]
+        chunks = extract_reference_chunks(
+            levels,
+            chunk_beats=arguments.chunk_beats,
+            stride_beats=arguments.stride_beats,
+        )
+        output = write_reference_library(arguments.out, chunks)
+        print(f"Wrote {output}")
+        print(f"Reference chunks: {len(chunks)}")
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "plan":
+        request = PlannerRequest(
+            mode=arguments.mode,
+            difficulty=arguments.difficulty,
+            beats=arguments.beats,
+            energy=arguments.energy,
+            onset=arguments.onset,
+            entry_gravity=arguments.entry_gravity,
+            entry_speed=arguments.entry_speed,
+            entry_mini=arguments.entry_mini,
+            previous_mode=arguments.previous_mode,
+        )
+        chunks = load_reference_library(arguments.reference_library)
+        references = retrieve_reference_chunks(
+            chunks,
+            request,
+            limit=max(1, min(arguments.references, 8)),
+        )
+
+        if arguments.dry_run:
+            payload = {
+                "request": request.__dict__,
+                "reference_count": len(references),
+                "references": references,
+            }
+        else:
+            plan = request_openai_plan(
+                request,
+                references,
+                model=arguments.model,
+                reasoning_effort=arguments.reasoning_effort,
+            )
+            payload = {
+                "planner": "openai",
+                "model": arguments.model,
+                "request": request.__dict__,
+                "reference_ids": [reference.get("id") for reference in references],
+                "plan": plan,
+            }
+
+        output = write_json(arguments.out, payload)
+        print(f"Wrote {output}")
+        print(f"Retrieved references: {len(references)}")
+        if not arguments.dry_run:
+            print(f"Planned actions: {len(payload['plan'].get('actions', []))}")
         return
 
     parser.error("Unknown command")
