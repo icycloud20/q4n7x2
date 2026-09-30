@@ -619,14 +619,6 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
         return -1_000_000.0
 
     source_spb = float(chunk.get("source_seconds_per_beat", 0.0) or 0.0)
-    if request.seconds_per_beat > 0.0 and source_spb > 0.0:
-        timing_ratio = max(
-            source_spb / request.seconds_per_beat,
-            request.seconds_per_beat / source_spb,
-        )
-        if timing_ratio > 1.30:
-            return -1_000_000.0
-
     score = 8.0
 
     if chunk.get("difficulty") == request.difficulty:
@@ -928,7 +920,7 @@ def _layout_reference_set(
             request = PlannerRequest(
                 mode=mode,
                 difficulty=difficulty,
-                beats=4.0,
+                beats=1.0,
                 energy=target_energy,
                 onset=target_energy,
                 entry_speed=entry_speed,
