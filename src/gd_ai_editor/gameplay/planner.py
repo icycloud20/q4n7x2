@@ -91,8 +91,8 @@ LAYOUT_PLAN_SCHEMA: dict[str, Any] = {
                     "intensity": {"type": "number", "minimum": 0, "maximum": 1},
                     "reference_ids": {
                         "type": "array",
-                        "minItems": 2,
-                        "maxItems": 2,
+                        "minItems": 8,
+                        "maxItems": 8,
                         "items": {"type": "string", "minLength": 1},
                     },
                     "actions": {
@@ -261,8 +261,8 @@ def _source_seconds_per_beat(objects: list[dict[str, Any]]) -> float:
 def extract_reference_chunks(
     levels: list[dict[str, Any]],
     *,
-    chunk_beats: float = 4.0,
-    stride_beats: float = 2.0,
+    chunk_beats: float = 1.0,
+    stride_beats: float = 0.5,
 ) -> list[dict[str, Any]]:
     if chunk_beats <= 0 or stride_beats <= 0:
         raise ValueError("chunk_beats and stride_beats must be positive")
@@ -313,7 +313,7 @@ def extract_reference_chunks(
                 if len(mode_objects) < 3:
                     continue
 
-                state_signature = _stable_state_signature(window_objects)
+                state_signature = _stable_state_signature(mode_objects)
                 if state_signature is None:
                     continue
 
@@ -335,6 +335,29 @@ def extract_reference_chunks(
                     continue
                 if stable_dual or stable_mirror:
                     continue
+
+                gameplay_window_objects = [
+                    item
+                    for item in window_objects
+                    if item.get("category") in (
+                        "solid",
+                        "hazard",
+                        "orb",
+                        "pad",
+                        "collision",
+                    )
+                ]
+                if gameplay_window_objects:
+                    same_mode_count = sum(
+                        1
+                        for item in gameplay_window_objects
+                        if (
+                            isinstance(item.get("state_before"), dict)
+                            and item["state_before"].get("mode") == mode
+                        )
+                    )
+                    if same_mode_count / len(gameplay_window_objects) < 0.85:
+                        continue
 
                 interactions = [
                     item
@@ -364,7 +387,7 @@ def extract_reference_chunks(
                     if beat is None:
                         continue
                     local_beat = beat - start_beat
-                    if local_beat < 0.375 or chunk_beats - local_beat < 0.375:
+                    if local_beat < 0.08 or chunk_beats - local_beat < 0.08:
                         boundary_unsafe = True
                         break
 
@@ -591,9 +614,6 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
         return -1_000_000.0
     if bool(entry.get("mini", False)) != request.entry_mini:
         return -1_000_000.0
-    if entry.get("speed") != request.entry_speed:
-        return -1_000_000.0
-
     vertical_span_units = float(chunk.get("vertical_span", 0.0) or 0.0)
     if vertical_span_units > 540.0:
         return -1_000_000.0
@@ -604,7 +624,7 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
             source_spb / request.seconds_per_beat,
             request.seconds_per_beat / source_spb,
         )
-        if timing_ratio > 1.22:
+        if timing_ratio > 1.30:
             return -1_000_000.0
 
     score = 8.0
@@ -617,7 +637,11 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
     chunk_intensity = float(chunk.get("intensity", 0.0) or 0.0)
     score += max(0.0, 2.0 - abs(chunk_intensity - request.energy) * 3.0)
 
-    score += 1.7
+    score += 1.3
+    if entry.get("speed") == request.entry_speed:
+        score += 1.6
+    elif request.mode == "wave":
+        score -= 0.7
 
     if request.seconds_per_beat > 0.0 and source_spb > 0.0:
         timing_ratio = max(
@@ -911,17 +935,17 @@ def _layout_reference_set(
                 seconds_per_beat=seconds_per_beat,
             )
 
-            for chunk in retrieve_reference_chunks(chunks, request, limit=3):
+            for chunk in retrieve_reference_chunks(chunks, request, limit=8):
                 chunk_id = str(chunk.get("id", ""))
                 if not chunk_id or chunk_id in used_ids:
                     continue
                 used_ids.add(chunk_id)
                 mode_references.append(chunk)
 
-                if len(mode_references) >= 5:
+                if len(mode_references) >= 14:
                     break
 
-            if len(mode_references) >= 5:
+            if len(mode_references) >= 14:
                 break
 
         references.extend(mode_references)
@@ -981,10 +1005,10 @@ def build_layout_prompt(
         f"{len(sections) - 1} in order. "
         "Use the song energy/onset contour to create escalation, contrast, and "
         "breathing moments while staying at the target difficulty. Every section "
-        "must select exactly two reference_ids from HUMAN REFERENCE CHUNKS with "
-        "the same mode. Those are real four-beat human gameplay chunks and the "
+        "must select exactly eight reference_ids from HUMAN REFERENCE CHUNKS with "
+        "the same mode. Those are real one-beat human gameplay microchunks and the "
         "local compiler will stitch/adapt their actual collision geometry. Only "
-        "choose modes that have at least two human references listed below; do "
+        "choose modes that have enough human references listed below; do "
         "not invent a mode section without reference support. Pick "
         "references whose intensity and structure fit the song section, avoid "
         "reusing the same pair in adjacent sections, and mix source levels when "
@@ -1058,39 +1082,30 @@ def _validate_layout_plan(
             raise RuntimeError(f"Planner returned unsupported mode {mode!r}")
 
         reference_ids = section.get("reference_ids")
-        if not isinstance(reference_ids, list) or len(reference_ids) != 2:
+        if not isinstance(reference_ids, list) or len(reference_ids) != 8:
             raise RuntimeError(
-                f"Section {expected_index} must select exactly two human references"
+                f"Section {expected_index} must select exactly eight human microchunks"
             )
 
-        reference_pair = (str(reference_ids[0]), str(reference_ids[1]))
-        if reference_pair[0] == reference_pair[1]:
+        normalized_ids = tuple(str(value) for value in reference_ids)
+        if len(set(normalized_ids)) < 4:
             raise RuntimeError(
-                f"Section {expected_index} selected the same human chunk twice"
+                f"Section {expected_index} does not use enough distinct human microchunks"
             )
+        if any(
+            normalized_ids[index] == normalized_ids[index - 1]
+            for index in range(1, len(normalized_ids))
+        ):
+            raise RuntimeError(
+                f"Section {expected_index} repeats a microchunk back-to-back"
+            )
+
+        reference_pair = (normalized_ids[0], normalized_ids[1])
         if previous_reference_pair == reference_pair:
             raise RuntimeError(
-                f"Section {expected_index} repeated the previous human chunk pair"
+                f"Section {expected_index} repeated the previous opening pair"
             )
         previous_reference_pair = reference_pair
-
-        first_reference = references_by_id.get(reference_pair[0])
-        second_reference = references_by_id.get(reference_pair[1])
-        if not isinstance(first_reference, dict) or not isinstance(second_reference, dict):
-            raise TypeError(
-                f"Section {expected_index} is missing human reference data"
-            )
-
-        first_entry = first_reference.get("entry")
-        second_entry = second_reference.get("entry")
-        if not isinstance(first_entry, dict) or not isinstance(second_entry, dict):
-            raise TypeError(
-                f"Section {expected_index} has incomplete reference state"
-            )
-        if first_entry.get("speed") != second_entry.get("speed"):
-            raise RuntimeError(
-                f"Section {expected_index} tried to stitch different speed states"
-            )
 
         for reference_id in reference_ids:
             reference = references_by_id.get(str(reference_id))
@@ -1149,9 +1164,22 @@ def _validate_layout_plan(
             )
 
 
+def _speed_multiplier(speed: str) -> float:
+    return {
+        "slow": 0.8061,
+        "normal": 1.0,
+        "fast": 1.2434,
+        "faster": 1.5020,
+        "fastest": 1.8486,
+    }.get(speed, 1.0)
+
+
 def _attach_reference_render_sections(
     plan: dict[str, Any],
     chunks_by_id: dict[str, dict[str, Any]],
+    *,
+    target_speed: str,
+    target_seconds_per_beat: float,
 ) -> dict[str, Any]:
     render_sections: list[dict[str, Any]] = []
 
@@ -1167,28 +1195,64 @@ def _attach_reference_render_sections(
             str(value)
             for value in section.get("reference_ids", [])
             if isinstance(value, str)
-        ][:2]
-        if len(reference_ids) != 2:
+        ][:8]
+        if len(reference_ids) != 8:
             continue
 
-        first_reference = chunks_by_id.get(reference_ids[0])
-        second_reference = chunks_by_id.get(reference_ids[1])
-        if not isinstance(first_reference, dict) or not isinstance(second_reference, dict):
+        references = [
+            chunks_by_id.get(reference_id)
+            for reference_id in reference_ids
+        ]
+        if any(not isinstance(reference, dict) for reference in references):
             continue
 
-        first_entry = float(first_reference.get("entry_y_offset", 0.0) or 0.0)
-        first_exit = float(first_reference.get("exit_y_offset", 0.0) or 0.0)
-        second_entry = float(second_reference.get("entry_y_offset", 0.0) or 0.0)
-        second_exit = float(second_reference.get("exit_y_offset", 0.0) or 0.0)
-
-        # Critical stitching rule: move the second human chunk so its original
-        # entry route meets the first human chunk's original exit route.
-        second_y_shift = first_exit - second_entry
+        typed_references = [
+            reference
+            for reference in references
+            if isinstance(reference, dict)
+        ]
 
         render_objects: list[dict[str, Any]] = []
+        source_levels: list[str] = []
+        current_exit = 0.0
+        section_entry = 0.0
+        target_speed_multiplier = _speed_multiplier(target_speed)
 
-        for half_index, reference in enumerate((first_reference, second_reference)):
-            y_shift = 0.0 if half_index == 0 else second_y_shift
+        for micro_index, reference in enumerate(typed_references):
+            source_levels.append(str(reference.get("level", "")))
+
+            entry_y = float(reference.get("entry_y_offset", 0.0) or 0.0)
+            exit_y = float(reference.get("exit_y_offset", 0.0) or 0.0)
+
+            vertical_scale = 1.0
+            if str(section.get("mode", "")) == "wave":
+                entry_state = reference.get("entry")
+                source_speed = (
+                    str(entry_state.get("speed", "normal"))
+                    if isinstance(entry_state, dict)
+                    else "normal"
+                )
+                source_spb = float(
+                    reference.get("source_seconds_per_beat", 0.0) or 0.0
+                )
+                timing_scale = (
+                    target_seconds_per_beat / source_spb
+                    if source_spb > 1e-6
+                    else 1.0
+                )
+                vertical_scale = (
+                    target_speed_multiplier
+                    / _speed_multiplier(source_speed)
+                    * timing_scale
+                )
+                vertical_scale = min(1.45, max(0.70, vertical_scale))
+
+            entry_y *= vertical_scale
+            exit_y *= vertical_scale
+
+            y_shift = 0.0 if micro_index == 0 else current_exit - entry_y
+            if micro_index == 0:
+                section_entry = entry_y
 
             for item in reference.get("geometry_cells", []):
                 if not isinstance(item, dict):
@@ -1198,13 +1262,18 @@ def _attach_reference_render_sections(
                 relative_y = _finite_number(item.get("relative_y"))
                 if beat_offset is None or relative_y is None:
                     continue
-                if beat_offset < 0.0 or beat_offset > 4.0:
+
+                chunk_beats = float(reference.get("beats", 1.0) or 1.0)
+                if beat_offset < 0.0 or beat_offset > chunk_beats + 1e-6:
                     continue
 
                 render_objects.append(
                     {
-                        "beat": round(half_index * 4.0 + beat_offset, 4),
-                        "relative_y": round(relative_y + y_shift, 2),
+                        "beat": round(micro_index + beat_offset, 4),
+                        "relative_y": round(
+                            relative_y * vertical_scale + y_shift,
+                            2,
+                        ),
                         "category": str(item.get("category", "")),
                         "object_id": int(item.get("object_id", 0) or 0),
                         "rotation": float(item.get("rotation", 0.0) or 0.0),
@@ -1212,6 +1281,8 @@ def _attach_reference_render_sections(
                         "scale_y": float(item.get("scale_y", 1.0) or 1.0),
                     }
                 )
+
+            current_exit = exit_y + y_shift
 
         unique: dict[tuple[Any, ...], dict[str, Any]] = {}
         for item in render_objects:
@@ -1235,30 +1306,20 @@ def _attach_reference_render_sections(
             ),
         )
 
-        entry_state = first_reference.get("entry")
-        entry_speed = (
-            str(entry_state.get("speed", "normal"))
-            if isinstance(entry_state, dict)
-            else "normal"
-        )
-
         render_sections.append(
             {
                 "index": int(section.get("index", 0) or 0),
                 "mode": str(section.get("mode", "cube")),
-                "entry_y_offset": round(first_entry, 2),
-                "exit_y_offset": round(second_exit + second_y_shift, 2),
-                "entry_speed": entry_speed,
+                "entry_y_offset": round(section_entry, 2),
+                "exit_y_offset": round(current_exit, 2),
+                "entry_speed": target_speed,
                 "source_chunk_ids": reference_ids,
-                "source_levels": [
-                    str(first_reference.get("level", "")),
-                    str(second_reference.get("level", "")),
-                ],
+                "source_levels": source_levels,
                 "objects": render_objects,
             }
         )
 
-    plan["render_strategy"] = "human_chunk_adaptation_v2"
+    plan["render_strategy"] = "human_microchunk_adaptation_v3"
     plan["render_sections"] = render_sections
     return plan
 
@@ -1340,7 +1401,17 @@ def request_openai_layout(
     plan = perform_request(prompt)
     try:
         _validate_layout_plan(plan, expected_sections, references_by_id)
-        return _attach_reference_render_sections(plan, references_by_id)
+        target_sections = _analysis_sections(analysis, song_offset=song_offset)
+        target_spb = mean(
+            float(section["seconds_per_beat"])
+            for section in target_sections
+        )
+        return _attach_reference_render_sections(
+            plan,
+            references_by_id,
+            target_speed=entry_speed,
+            target_seconds_per_beat=target_spb,
+        )
     except (RuntimeError, TypeError) as error:
         repair_prompt = (
             prompt
@@ -1352,7 +1423,17 @@ def request_openai_layout(
         )
         repaired = perform_request(repair_prompt)
         _validate_layout_plan(repaired, expected_sections, references_by_id)
-        return _attach_reference_render_sections(repaired, references_by_id)
+        target_sections = _analysis_sections(analysis, song_offset=song_offset)
+        target_spb = mean(
+            float(section["seconds_per_beat"])
+            for section in target_sections
+        )
+        return _attach_reference_render_sections(
+            repaired,
+            references_by_id,
+            target_speed=entry_speed,
+            target_seconds_per_beat=target_spb,
+        )
 
 
 def build_or_refresh_reference_library(
@@ -1413,7 +1494,7 @@ def build_or_refresh_reference_library(
     cache_path.write_text(
         json.dumps(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "source_signature": source_signature,
                 "source_level_count": len(levels),
                 "source_file_count": len(aligned_files),
