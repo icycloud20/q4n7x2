@@ -9,11 +9,12 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from typing import Any
 
 SUPPORTED_MODES = ("cube", "ship", "ball", "ufo", "wave")
 INTERACTION_CATEGORIES = {"hazard", "orb", "pad", "portal"}
+RENDER_CATEGORIES = {"solid", "hazard", "orb", "pad"}
 
 PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -88,6 +89,12 @@ LAYOUT_PLAN_SCHEMA: dict[str, Any] = {
                     "mode": {"type": "string", "enum": list(SUPPORTED_MODES)},
                     "concept": {"type": "string", "minLength": 1},
                     "intensity": {"type": "number", "minimum": 0, "maximum": 1},
+                    "reference_ids": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": {"type": "string", "minLength": 1},
+                    },
                     "actions": {
                         "type": "array",
                         "minItems": 3,
@@ -95,7 +102,14 @@ LAYOUT_PLAN_SCHEMA: dict[str, Any] = {
                         "items": ACTION_SCHEMA,
                     },
                 },
-                "required": ["index", "mode", "concept", "intensity", "actions"],
+                "required": [
+                    "index",
+                    "mode",
+                    "concept",
+                    "intensity",
+                    "reference_ids",
+                    "actions",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -250,7 +264,7 @@ def extract_reference_chunks(
                     for item in mode_objects
                     if (y := _finite_number(item.get("y"))) is not None
                 ]
-                anchor_y = min(all_y) if all_y else 0.0
+                anchor_y = float(median(all_y)) if all_y else 0.0
 
                 events: list[dict[str, Any]] = []
                 for item in interactions[:24]:
@@ -294,6 +308,109 @@ def extract_reference_chunks(
                     for bin_index, values in sorted(bins.items())
                 ]
 
+                geometry_cells: list[dict[str, Any]] = []
+                seen_geometry: set[tuple[Any, ...]] = set()
+
+                for item in mode_objects:
+                    category = str(item.get("category", ""))
+                    if category not in RENDER_CATEGORIES:
+                        continue
+
+                    beat = _finite_number(item.get("beat"))
+                    y = _finite_number(item.get("y"))
+                    if beat is None or y is None:
+                        continue
+
+                    beat_eighth = max(
+                        0,
+                        min(
+                            int(round(chunk_beats * 8)),
+                            int(round((beat - start_beat) * 8)),
+                        ),
+                    )
+                    y_step = int(round((y - anchor_y) / 15.0))
+                    object_id = int(item.get("object_id", 0) or 0)
+                    rotation_value = _finite_number(item.get("rotation")) or 0.0
+                    rotation = int(round(rotation_value / 45.0) * 45)
+
+                    # Collapse duplicate collision solids at the same normalized
+                    # location while preserving distinct hazards/orbs/pads.
+                    key = (
+                        beat_eighth,
+                        y_step,
+                        category if category != "solid" else "solid",
+                        object_id if category != "solid" else 0,
+                        rotation if category != "solid" else 0,
+                    )
+                    if key in seen_geometry:
+                        continue
+                    seen_geometry.add(key)
+
+                    geometry_cells.append(
+                        {
+                            "beat_eighth": beat_eighth,
+                            "y_step": y_step,
+                            "category": category,
+                            "object_id": object_id,
+                            "rotation": rotation,
+                        }
+                    )
+
+                geometry_cells.sort(
+                    key=lambda item: (
+                        int(item["beat_eighth"]),
+                        int(item["y_step"]),
+                        str(item["category"]),
+                    )
+                )
+
+                # Keep a detailed but bounded collision representation. This is
+                # what lets the LLM/compiler see actual human micro-structure
+                # instead of only min/max solid summaries.
+                non_solids = [
+                    item for item in geometry_cells if item["category"] != "solid"
+                ][:48]
+                solid_cells = [
+                    item for item in geometry_cells if item["category"] == "solid"
+                ]
+                if len(solid_cells) > 128:
+                    last = len(solid_cells) - 1
+                    solid_cells = [
+                        solid_cells[round(index * last / 127)]
+                        for index in range(128)
+                    ]
+
+                geometry_cells = sorted(
+                    solid_cells + non_solids,
+                    key=lambda item: (
+                        int(item["beat_eighth"]),
+                        int(item["y_step"]),
+                        str(item["category"]),
+                    ),
+                )
+
+                entry_cells = [
+                    int(item["y_step"])
+                    for item in geometry_cells
+                    if int(item["beat_eighth"]) <= 8
+                    and item["category"] == "solid"
+                ]
+                exit_cells = [
+                    int(item["y_step"])
+                    for item in geometry_cells
+                    if int(item["beat_eighth"]) >= int(chunk_beats * 8) - 8
+                    and item["category"] == "solid"
+                ]
+
+                entry_y_step = int(round(median(entry_cells))) if entry_cells else 0
+                exit_y_step = int(round(median(exit_cells))) if exit_cells else 0
+                vertical_span_steps = (
+                    max(int(item["y_step"]) for item in geometry_cells)
+                    - min(int(item["y_step"]) for item in geometry_cells)
+                    if geometry_cells
+                    else 0
+                )
+
                 onset_values = [
                     value
                     for item in mode_objects
@@ -317,6 +434,10 @@ def extract_reference_chunks(
                         "intensity": round(mean(onset_values), 4) if onset_values else 0.0,
                         "events": events,
                         "solid_profile": solid_profile[:16],
+                        "geometry_cells": geometry_cells,
+                        "entry_y_step": entry_y_step,
+                        "exit_y_step": exit_y_step,
+                        "vertical_span_steps": vertical_span_steps,
                     }
                 )
 
@@ -351,6 +472,10 @@ def _reference_score(chunk: dict[str, Any], request: PlannerRequest) -> float:
 
     event_count = int(chunk.get("interaction_count", 0) or 0)
     score += min(event_count, 16) * 0.08
+
+    vertical_span = int(chunk.get("vertical_span_steps", 0) or 0)
+    if vertical_span > 36:
+        score -= (vertical_span - 36) * 0.08
     if event_count > 28:
         score -= (event_count - 28) * 0.04
 
@@ -395,6 +520,7 @@ def build_planner_prompt(
 ) -> str:
     compact_references = [
         {
+            "id": reference.get("id"),
             "level": reference.get("level"),
             "difficulty": reference.get("difficulty"),
             "mode": reference.get("mode"),
@@ -402,8 +528,11 @@ def build_planner_prompt(
             "interaction_count": reference.get("interaction_count"),
             "solid_count": reference.get("solid_count"),
             "intensity": reference.get("intensity"),
+            "entry_y_step": reference.get("entry_y_step"),
+            "exit_y_step": reference.get("exit_y_step"),
+            "vertical_span_steps": reference.get("vertical_span_steps"),
             "events": reference.get("events"),
-            "solid_profile": reference.get("solid_profile"),
+            "geometry_cells": reference.get("geometry_cells"),
         }
         for reference in references
     ]
@@ -593,20 +722,43 @@ def _layout_reference_set(
     average_energy: float,
 ) -> list[dict[str, Any]]:
     references: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+
+    energy_targets = (
+        max(0.25, average_energy - 0.25),
+        average_energy,
+        min(1.0, average_energy + 0.20),
+    )
 
     for mode in SUPPORTED_MODES:
-        request = PlannerRequest(
-            mode=mode,
-            difficulty=difficulty,
-            beats=4.0,
-            energy=average_energy,
-            onset=average_energy,
-            entry_speed="fast",
-        )
-        references.extend(retrieve_reference_chunks(chunks, request, limit=2))
+        mode_references: list[dict[str, Any]] = []
+
+        for target_energy in energy_targets:
+            request = PlannerRequest(
+                mode=mode,
+                difficulty=difficulty,
+                beats=4.0,
+                energy=target_energy,
+                onset=target_energy,
+                entry_speed="fast",
+            )
+
+            for chunk in retrieve_reference_chunks(chunks, request, limit=3):
+                chunk_id = str(chunk.get("id", ""))
+                if not chunk_id or chunk_id in used_ids:
+                    continue
+                used_ids.add(chunk_id)
+                mode_references.append(chunk)
+
+                if len(mode_references) >= 5:
+                    break
+
+            if len(mode_references) >= 5:
+                break
+
+        references.extend(mode_references)
 
     return references
-
 
 def build_layout_prompt(
     analysis: dict[str, Any],
@@ -614,7 +766,7 @@ def build_layout_prompt(
     *,
     difficulty: str,
     song_offset: float = 0.0,
-) -> tuple[str, int]:
+) -> tuple[str, int, list[dict[str, Any]]]:
     sections = _analysis_sections(analysis, song_offset=song_offset)
     if not sections:
         raise ValueError("No song sections were available for planning")
@@ -649,7 +801,14 @@ def build_layout_prompt(
         "sections with indices 0 through "
         f"{len(sections) - 1} in order. "
         "Use the song energy/onset contour to create escalation, contrast, and "
-        "breathing moments while staying at the target difficulty. Use all five "
+        "breathing moments while staying at the target difficulty. Every section "
+        "must select exactly two reference_ids from HUMAN REFERENCE CHUNKS with "
+        "the same mode. Those are real four-beat human gameplay chunks and the "
+        "local compiler will stitch/adapt their actual collision geometry. Pick "
+        "references whose intensity and structure fit the song section, avoid "
+        "reusing the same pair in adjacent sections, and mix source levels when "
+        "possible. The action list is high-level intent; reference geometry is "
+        "the primary visual/gameplay structure. Use all five "
         "supported modes across the full plan when the level is long enough, but "
         "do not rotate through them mechanically. Avoid repeating the same concept "
         "or evenly-spaced obstacle rhythm in adjacent sections. Every orb or pad "
@@ -668,10 +827,14 @@ def build_layout_prompt(
         f"{json.dumps(compact_references, separators=(',', ':'))}"
     )
 
-    return prompt, len(sections)
+    return prompt, len(sections), references
 
 
-def _validate_layout_plan(plan: dict[str, Any], expected_sections: int) -> None:
+def _validate_layout_plan(
+    plan: dict[str, Any],
+    expected_sections: int,
+    references_by_id: dict[str, dict[str, Any]],
+) -> None:
     sections = plan.get("sections")
     if not isinstance(sections, list) or len(sections) != expected_sections:
         raise RuntimeError(
@@ -710,6 +873,24 @@ def _validate_layout_plan(plan: dict[str, Any], expected_sections: int) -> None:
         mode = str(section.get("mode", ""))
         if mode not in allowed_by_mode:
             raise RuntimeError(f"Planner returned unsupported mode {mode!r}")
+
+        reference_ids = section.get("reference_ids")
+        if not isinstance(reference_ids, list) or len(reference_ids) != 2:
+            raise RuntimeError(
+                f"Section {expected_index} must select exactly two human references"
+            )
+
+        for reference_id in reference_ids:
+            reference = references_by_id.get(str(reference_id))
+            if reference is None:
+                raise RuntimeError(
+                    f"Section {expected_index} selected unknown reference {reference_id!r}"
+                )
+            if reference.get("mode") != mode:
+                raise RuntimeError(
+                    f"Section {expected_index} selected a {reference.get('mode')} "
+                    f"reference for {mode} gameplay"
+                )
 
         actions = section.get("actions")
         if not isinstance(actions, list):
@@ -756,6 +937,101 @@ def _validate_layout_plan(plan: dict[str, Any], expected_sections: int) -> None:
             )
 
 
+def _attach_reference_render_sections(
+    plan: dict[str, Any],
+    chunks_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    render_sections: list[dict[str, Any]] = []
+
+    sections = plan.get("sections")
+    if not isinstance(sections, list):
+        return plan
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+
+        reference_ids = [
+            str(value)
+            for value in section.get("reference_ids", [])
+            if isinstance(value, str)
+        ][:2]
+        if len(reference_ids) != 2:
+            continue
+
+        render_objects: list[dict[str, Any]] = []
+        entry_y_step = 0
+        exit_y_step = 0
+        source_levels: list[str] = []
+
+        for half_index, reference_id in enumerate(reference_ids):
+            reference = chunks_by_id.get(reference_id)
+            if not isinstance(reference, dict):
+                continue
+
+            source_levels.append(str(reference.get("level", "")))
+            if half_index == 0:
+                entry_y_step = int(reference.get("entry_y_step", 0) or 0)
+            else:
+                exit_y_step = int(reference.get("exit_y_step", 0) or 0)
+
+            for item in reference.get("geometry_cells", []):
+                if not isinstance(item, dict):
+                    continue
+
+                beat_eighth = int(item.get("beat_eighth", 0) or 0)
+                beat = half_index * 4.0 + beat_eighth / 8.0
+                if beat < half_index * 4.0 or beat > (half_index + 1) * 4.0:
+                    continue
+
+                render_objects.append(
+                    {
+                        "beat": round(beat, 3),
+                        "y_step": int(item.get("y_step", 0) or 0),
+                        "category": str(item.get("category", "")),
+                        "object_id": int(item.get("object_id", 0) or 0),
+                        "rotation": int(item.get("rotation", 0) or 0),
+                    }
+                )
+
+        # Do not preserve duplicate collision cells created by editor layering.
+        unique: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for item in render_objects:
+            key = (
+                round(float(item["beat"]) * 8),
+                int(item["y_step"]),
+                str(item["category"]),
+                int(item["object_id"]) if item["category"] != "solid" else 0,
+                int(item["rotation"]) if item["category"] != "solid" else 0,
+            )
+            unique.setdefault(key, item)
+
+        render_objects = sorted(
+            unique.values(),
+            key=lambda item: (
+                float(item["beat"]),
+                int(item["y_step"]),
+                str(item["category"]),
+            ),
+        )
+
+        render_sections.append(
+            {
+                "index": int(section.get("index", 0) or 0),
+                "mode": str(section.get("mode", "cube")),
+                "entry_y_step": entry_y_step,
+                "exit_y_step": exit_y_step,
+                "source_chunk_ids": reference_ids,
+                "source_levels": source_levels,
+                "objects": render_objects,
+            }
+        )
+
+    plan["render_strategy"] = "human_chunk_adaptation_v1"
+    plan["render_sections"] = render_sections
+    return plan
+
+
 def request_openai_layout(
     analysis: dict[str, Any],
     chunks: list[dict[str, Any]],
@@ -772,12 +1048,17 @@ def request_openai_layout(
             "OPENAI_API_KEY is not available in the process environment or Windows user variables."
         )
 
-    prompt, expected_sections = build_layout_prompt(
+    prompt, expected_sections, candidate_references = build_layout_prompt(
         analysis,
         chunks,
         difficulty=difficulty,
         song_offset=song_offset,
     )
+    references_by_id = {
+        str(reference.get("id")): reference
+        for reference in candidate_references
+        if reference.get("id")
+    }
 
     def perform_request(prompt_text: str) -> dict[str, Any]:
         body = {
@@ -825,8 +1106,8 @@ def request_openai_layout(
 
     plan = perform_request(prompt)
     try:
-        _validate_layout_plan(plan, expected_sections)
-        return plan
+        _validate_layout_plan(plan, expected_sections, references_by_id)
+        return _attach_reference_render_sections(plan, references_by_id)
     except (RuntimeError, TypeError) as error:
         repair_prompt = (
             prompt
@@ -837,8 +1118,8 @@ def request_openai_layout(
             + json.dumps(plan, separators=(",", ":"))
         )
         repaired = perform_request(repair_prompt)
-        _validate_layout_plan(repaired, expected_sections)
-        return repaired
+        _validate_layout_plan(repaired, expected_sections, references_by_id)
+        return _attach_reference_render_sections(repaired, references_by_id)
 
 
 def build_or_refresh_reference_library(
