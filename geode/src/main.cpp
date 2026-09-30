@@ -415,10 +415,23 @@ class $modify(GDAIEditorUI, EditorUI) {
     }
 
     void onGenerateBaseline(CCObject*) {
+        if (g_generationRunning.exchange(true)) {
+            showNotification(
+                "Gameplay generation is already running.",
+                NotificationIcon::Info
+            );
+            return;
+        }
+
+        auto finishEarly = [] {
+            g_generationRunning = false;
+        };
+
         auto* editorLayer = this->m_editorLayer;
         auto* level = editorLayer ? editorLayer->m_level : nullptr;
 
         if (!editorLayer || !level) {
+            finishEarly();
             FLAlertLayer::create(
                 "GD AI Editor",
                 "Could not read the current editor level.",
@@ -429,6 +442,7 @@ class $modify(GDAIEditorUI, EditorUI) {
 
         auto audioPath = resolveAudioPath(level);
         if (audioPath.empty()) {
+            finishEarly();
             FLAlertLayer::create(
                 "Song Not Found",
                 "Download this level's song in Geometry Dash first.",
@@ -437,13 +451,16 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto songDirectory = Mod::get()->getSaveDir() / "song-cache" / makeSongKey(level);
+        auto songDirectory =
+            Mod::get()->getSaveDir() / "song-cache" / makeSongKey(level);
         auto signature = makeFileSignature(audioPath);
         constexpr auto cacheVersion = "v2";
         auto analysisPath =
-            songDirectory / ("analysis-" + std::string(cacheVersion) + "-" + signature + ".json");
+            songDirectory
+            / ("analysis-" + std::string(cacheVersion) + "-" + signature + ".json");
 
         if (!std::filesystem::exists(analysisPath)) {
+            finishEarly();
             FLAlertLayer::create(
                 "Analyze Song First",
                 "Press the <cy>music-note</c> GD AI button once before generating a layout.",
@@ -452,62 +469,263 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto generation = generateBaselineLayout(editorLayer, analysisPath);
+        bool useLlm =
+            Mod::get()->getSettingValue<bool>("llm-planner-enabled");
 
-        if (!generation.success) {
+        if (!useLlm) {
+            auto generation = generateBaselineLayout(editorLayer, analysisPath);
+            finishEarly();
+
+            if (!generation.success) {
+                FLAlertLayer::create(
+                    "Generator Preview",
+                    generation.error,
+                    "OK"
+                )->show();
+                return;
+            }
+
+            showNotification(
+                fmt::format(
+                    "Generated {} objects across {} beats.",
+                    generation.createdObjects,
+                    generation.usedBeats
+                ),
+                NotificationIcon::Success,
+                4.0f
+            );
+
+            auto learningLine = generation.learnedProfileLoaded
+                ? fmt::format(
+                    "Training profile: <cg>{}</c> levels / <cy>{}</c> cube phrases"
+                    " / <co>{}</c> style motifs",
+                    generation.learnedSourceLevels,
+                    generation.learnedSourcePhrases,
+                    generation.learnedMotifCount
+                )
+                : std::string("Training profile: <cr>fallback only</c>");
+
             FLAlertLayer::create(
-                "Generator Preview",
-                generation.error,
+                "Gameplay Planner v3.2",
+                fmt::format(
+                    "Target: <cr>{}</c> ({:.0f}%).\n"
+                    "Created <cg>{}</c> objects across <cy>{}</c> main beats.\n"
+                    "Built <co>{}</c> structural objects and <co>{}</c> gameplay interactions "
+                    "across <cy>{}</c> chunks.\n"
+                    "Planned <cg>{}</c> mode sections with <cy>{}</c> form transitions.\n\n"
+                    "{}\n"
+                    "Mode cadence and transition order are learned from the target difficulty.\n"
+                    "Modes: cube, ship, ball, UFO, wave.",
+                    generation.targetDifficulty,
+                    generation.targetDifficultyScore * 100.0,
+                    generation.createdObjects,
+                    generation.usedBeats,
+                    generation.structuredBlocks,
+                    generation.gameplayEvents,
+                    generation.phraseCount,
+                    generation.modeSections,
+                    generation.modeTransitions,
+                    learningLine
+                ),
                 "OK"
             )->show();
             return;
         }
 
+        auto apiKey = std::getenv("OPENAI_API_KEY");
+        if (!apiKey || std::string(apiKey).empty()) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Luna Planner Needs API Key",
+                "Set <cy>OPENAI_API_KEY</c> in Windows, restart Geometry Dash, "
+                "then press Generate again.<br><br>The key is never stored in the level or repository.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto backendPath =
+            Mod::get()->getResourcesDir() / "gd-ai-backend.exe";
+        if (!std::filesystem::exists(backendPath)) {
+            finishEarly();
+            FLAlertLayer::create(
+                "Backend Missing",
+                "The bundled GD AI backend is missing from this build.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto trainingDirectory =
+            Mod::get()->getSaveDir() / "gameplay-exports";
+        if (!std::filesystem::exists(trainingDirectory)) {
+            finishEarly();
+            FLAlertLayer::create(
+                "No Training Exports",
+                "The LLM planner needs your aligned gameplay exports first.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto cacheDirectory = Mod::get()->getSaveDir() / "llm-cache";
+        auto planDirectory = Mod::get()->getSaveDir() / "llm-plans";
+        std::error_code directoryError;
+        std::filesystem::create_directories(cacheDirectory, directoryError);
+        directoryError.clear();
+        std::filesystem::create_directories(planDirectory, directoryError);
+
+        if (directoryError) {
+            finishEarly();
+            FLAlertLayer::create(
+                "GD AI Editor",
+                "Could not create the LLM planner cache directory.",
+                "OK"
+            )->show();
+            return;
+        }
+
+        auto cachePath = cacheDirectory / "human-chunks-v1.json";
+        auto stem = exportStem(level);
+        auto planPath = planDirectory / (stem + "-plan.json");
+        auto logPath = planDirectory / (stem + "-plan.log");
+        auto difficulty =
+            Mod::get()->getSettingValue<std::string>("target-difficulty");
+        auto model =
+            Mod::get()->getSettingValue<std::string>("planner-model");
+        auto reasoningEffort =
+            Mod::get()->getSettingValue<std::string>("planner-reasoning-effort");
+        double songOffset = editorLayer->m_levelSettings->m_songOffset;
+
         showNotification(
-            fmt::format(
-                "Generated {} objects across {} beats.",
-                generation.createdObjects,
-                generation.usedBeats
-            ),
-            NotificationIcon::Success,
+            "GPT-6 Luna is planning gameplay from your training levels...",
+            NotificationIcon::Loading,
             4.0f
         );
 
-        auto learningLine = generation.learnedProfileLoaded
-            ? fmt::format(
-                "Training profile: <cg>{}</c> levels / <cy>{}</c> cube phrases"
-                " / <co>{}</c> style motifs",
-                generation.learnedSourceLevels,
-                generation.learnedSourcePhrases,
-                generation.learnedMotifCount
-            )
-            : std::string("Training profile: <cr>fallback only</c>");
+        editorLayer->retain();
 
-        FLAlertLayer::create(
-            "Gameplay Planner v3.2",
-            fmt::format(
-                "Target: <cr>{}</c> ({:.0f}%).\n"
-                "Created <cg>{}</c> objects across <cy>{}</c> main beats.\n"
-                "Built <co>{}</c> structural objects and <co>{}</c> gameplay interactions "
-                "across <cy>{}</c> chunks.\n"
-                "Planned <cg>{}</c> mode sections with <cy>{}</c> form transitions.\n\n"
-                "{}\n"
-                "Mode cadence and transition order are learned from the target difficulty.\n"
-                "Modes: cube, ship, ball, UFO, wave.",
-                generation.targetDifficulty,
-                generation.targetDifficultyScore * 100.0,
-                generation.createdObjects,
-                generation.usedBeats,
-                generation.structuredBlocks,
-                generation.gameplayEvents,
-                generation.phraseCount,
-                generation.modeSections,
-                generation.modeTransitions,
-                learningLine,
-                generation.learnedSourcePhrases
-            ),
-            "OK"
-        )->show();
+        std::thread([
+            editorLayer,
+            backendPath,
+            analysisPath,
+            trainingDirectory,
+            cachePath,
+            planPath,
+            logPath,
+            difficulty,
+            model,
+            reasoningEffort,
+            songOffset
+        ] {
+            {
+                std::ofstream logFile(logPath, std::ios::out | std::ios::trunc);
+                if (logFile) {
+                    logFile
+                        << "GD AI Editor LLM gameplay planner\n"
+                        << "Model: " << model << "\n"
+                        << "Reasoning: " << reasoningEffort << "\n"
+                        << "Difficulty: " << difficulty << "\n"
+                        << "Training directory: " << trainingDirectory.string() << "\n"
+                        << "Reference cache: " << cachePath.string() << "\n"
+                        << "Plan output: " << planPath.string() << "\n\n";
+                }
+            }
+
+#ifdef GEODE_IS_WINDOWS
+            int exitCode = runLlmPlanProcess(
+                backendPath,
+                analysisPath,
+                trainingDirectory,
+                cachePath,
+                planPath,
+                logPath,
+                difficulty,
+                model,
+                reasoningEffort,
+                songOffset
+            );
+#else
+            int exitCode = -1;
+#endif
+
+            bool plannerSuccess =
+                exitCode == 0 && std::filesystem::exists(planPath);
+
+            Loader::get()->queueInMainThread([
+                editorLayer,
+                plannerSuccess,
+                exitCode,
+                analysisPath,
+                planPath,
+                logPath,
+                model
+            ] {
+                if (!plannerSuccess) {
+                    g_generationRunning = false;
+                    editorLayer->release();
+
+                    FLAlertLayer::create(
+                        "Luna Planning Failed",
+                        fmt::format(
+                            "The planner exited with code <cr>{}</c>.<br><br>"
+                            "No procedural gameplay was substituted, so you always know "
+                            "whether the LLM actually ran.<br><br>Log:<br><cy>{}</c>",
+                            exitCode,
+                            logPath.string()
+                        ),
+                        "OK"
+                    )->show();
+                    return;
+                }
+
+                auto generation =
+                    generateLlmLayout(editorLayer, analysisPath, planPath);
+
+                g_generationRunning = false;
+                editorLayer->release();
+
+                if (!generation.success) {
+                    FLAlertLayer::create(
+                        "LLM Compile Failed",
+                        fmt::format(
+                            "{}<br><br>Plan:<br><cy>{}</c>",
+                            generation.error,
+                            planPath.string()
+                        ),
+                        "OK"
+                    )->show();
+                    return;
+                }
+
+                showNotification(
+                    fmt::format(
+                        "Luna generated {} objects across {} sections.",
+                        generation.createdObjects,
+                        generation.sections
+                    ),
+                    NotificationIcon::Success,
+                    5.0f
+                );
+
+                FLAlertLayer::create(
+                    "Luna Gameplay Planner v1",
+                    fmt::format(
+                        "Model: <cg>{}</c>\n"
+                        "Compiled <cy>{}</c> objects and <co>{}</c> gameplay interactions.\n"
+                        "Sections: <cg>{}</c> / mode transitions: <cy>{}</c>.\n\n"
+                        "This build uses the LLM for action/rhythm composition and "
+                        "the local compiler for exact GD object placement.",
+                        model,
+                        generation.createdObjects,
+                        generation.gameplayEvents,
+                        generation.sections,
+                        generation.modeTransitions
+                    ),
+                    "OK"
+                )->show();
+            });
+        }).detach();
     }
 
     void onExportGameplay(CCObject*) {
