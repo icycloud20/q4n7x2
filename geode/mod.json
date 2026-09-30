@@ -56,6 +56,31 @@
         "Insane Demon",
         "Extreme Demon"
       ]
+    },
+    "llm-planner-enabled": {
+      "type": "bool",
+      "name": "Use LLM Gameplay Planner",
+      "description": "Use GPT-6 Luna to plan action timing from your local training exports. Requires OPENAI_API_KEY in the environment.",
+      "default": false
+    },
+    "planner-model": {
+      "type": "string",
+      "name": "Planner Model",
+      "description": "OpenAI model used for gameplay planning.",
+      "default": "gpt-6-luna",
+      "one-of": [
+        "gpt-6-luna"
+      ]
+    },
+    "planner-reasoning-effort": {
+      "type": "string",
+      "name": "Planner Reasoning",
+      "description": "Low is the cheapest/default setting. Medium may help difficult repairs later.",
+      "default": "low",
+      "one-of": [
+        "low",
+        "medium"
+      ]
     }
   }
 }
