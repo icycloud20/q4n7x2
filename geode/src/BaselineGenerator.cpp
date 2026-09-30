@@ -72,6 +72,128 @@ enum class MotifKind {
     Portal = 5,
 };
 
+enum class GameplayMode {
+    Cube = 0,
+    Ship = 1,
+    Ball = 2,
+    Ufo = 3,
+    Wave = 4,
+};
+
+int portalObjectIDForMode(GameplayMode mode) {
+    switch (mode) {
+        case GameplayMode::Cube: return 12;
+        case GameplayMode::Ship: return 13;
+        case GameplayMode::Ball: return 47;
+        case GameplayMode::Ufo: return 111;
+        case GameplayMode::Wave: return 660;
+    }
+
+    return 12;
+}
+
+char const* gameplayModeName(GameplayMode mode) {
+    switch (mode) {
+        case GameplayMode::Cube: return "cube";
+        case GameplayMode::Ship: return "ship";
+        case GameplayMode::Ball: return "ball";
+        case GameplayMode::Ufo: return "ufo";
+        case GameplayMode::Wave: return "wave";
+    }
+
+    return "cube";
+}
+
+GameplayMode chooseGameplayModeForSection(
+    std::size_t sectionIndex,
+    double energy,
+    double onset,
+    GameplayMode previous,
+    GameplayMode twoBack
+) {
+    if (sectionIndex == 0) {
+        return GameplayMode::Cube;
+    }
+
+    struct Candidate {
+        GameplayMode mode;
+        double score;
+    };
+
+    double pulse = std::clamp(onset, 0.0, 1.0);
+    double drive = std::clamp(energy, 0.0, 1.0);
+    double sustained = std::clamp(drive - pulse * 0.28 + 0.35, 0.0, 1.0);
+
+    std::array<Candidate, 5> candidates = {{
+        {
+            GameplayMode::Cube,
+            0.48
+                + pulse * 0.30
+                + (1.0 - std::abs(drive - 0.48)) * 0.22,
+        },
+        {
+            GameplayMode::Ship,
+            0.18 + drive * 0.55 + sustained * 0.30,
+        },
+        {
+            GameplayMode::Ball,
+            0.30
+                + pulse * 0.35
+                + (1.0 - std::abs(drive - 0.52)) * 0.28,
+        },
+        {
+            GameplayMode::Ufo,
+            0.18 + pulse * 0.58 + drive * 0.22,
+        },
+        {
+            GameplayMode::Wave,
+            0.08 + drive * 0.62 + pulse * 0.34,
+        },
+    }};
+
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        auto& candidate = candidates[index];
+
+        if (candidate.mode == previous) {
+            candidate.score -= 0.34;
+        }
+        if (candidate.mode == twoBack) {
+            candidate.score -= 0.10;
+        }
+
+        if (
+            candidate.mode == GameplayMode::Wave
+            && drive < 0.48
+        ) {
+            candidate.score -= 0.42;
+        }
+
+        if (
+            candidate.mode == GameplayMode::Ship
+            && drive < 0.34
+        ) {
+            candidate.score -= 0.25;
+        }
+
+        // Tiny deterministic tie-breaker: stable for the same song, but avoids
+        // always selecting the first mode when scores are nearly identical.
+        candidate.score += std::fmod(
+            static_cast<double>((sectionIndex + 1) * (index + 3)) * 0.1732050807,
+            0.07
+        );
+    }
+
+    auto best = std::max_element(
+        candidates.begin(),
+        candidates.end(),
+        [](Candidate const& left, Candidate const& right) {
+            return left.score < right.score;
+        }
+    );
+
+    return best != candidates.end() ? best->mode : GameplayMode::Cube;
+}
+
 struct MotifEvent {
     MotifKind kind = MotifKind::Solid;
     int objectID = 1;
