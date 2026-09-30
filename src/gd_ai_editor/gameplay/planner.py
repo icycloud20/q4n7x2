@@ -723,8 +723,12 @@ def build_planner_prompt(
             "interaction_count": reference.get("interaction_count"),
             "solid_count": reference.get("solid_count"),
             "intensity": reference.get("intensity"),
+            "start_beat": reference.get("start_beat"),
+            "source_anchor_y": reference.get("source_anchor_y"),
             "entry_y_offset": reference.get("entry_y_offset"),
             "exit_y_offset": reference.get("exit_y_offset"),
+            "safe_entry": reference.get("safe_entry"),
+            "safe_exit": reference.get("safe_exit"),
             "vertical_span": reference.get("vertical_span"),
             "source_seconds_per_beat": reference.get("source_seconds_per_beat"),
             "events": reference.get("events"),
@@ -1045,8 +1049,12 @@ def build_layout_prompt(
         "Use the song energy/onset contour to create escalation, contrast, and "
         "breathing moments while staying at the target difficulty. Every section "
         "must select exactly eight reference_ids from HUMAN REFERENCE CHUNKS with "
-        "the same mode. Those are real one-beat human gameplay microchunks and the "
-        "local compiler will stitch/adapt their actual collision geometry. Only "
+        "the same mode. Treat them as four ordered contiguous pairs: [0,1], [2,3], "
+        "[4,5], [6,7]. Within each pair, both references MUST come from the same "
+        "source level and the second start_beat MUST equal the first start_beat + 1.0. "
+        "Section 0 MUST be cube and its first reference must have safe_entry=true. "
+        "The local compiler reconstructs each pair in its original source geometry "
+        "before stitching the four pairs. Only "
         "choose a mode only when at least four distinct reference IDs for "
         "that mode are listed below; do not invent unsupported modes. Pick references "
         "whose intensity and structure fit the song section, never repeat the same "
