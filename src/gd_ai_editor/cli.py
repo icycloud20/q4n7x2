@@ -9,9 +9,11 @@ from gd_ai_editor.gameplay import (
     PlannerRequest,
     align_gameplay_export,
     build_motif_profile,
+    build_or_refresh_reference_library,
     extract_reference_chunks,
     load_json,
     load_reference_library,
+    request_openai_layout,
     request_openai_plan,
     retrieve_reference_chunks,
     write_json,
@@ -176,6 +178,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write retrieved examples/request metadata without calling OpenAI",
     )
 
+    layout_parser = gameplay_commands.add_parser(
+        "plan-layout",
+        help="Plan a complete generated level with one GPT-6 Luna request",
+    )
+    layout_parser.add_argument("analysis_file", type=Path)
+    layout_parser.add_argument("training_directory", type=Path)
+    layout_parser.add_argument("--cache", type=Path, required=True)
+    layout_parser.add_argument("--out", type=Path, required=True)
+    layout_parser.add_argument("--difficulty", default="Hard Demon")
+    layout_parser.add_argument("--model", default="gpt-6-luna")
+    layout_parser.add_argument("--reasoning-effort", default="low")
+    layout_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build/cache human references but do not call OpenAI",
+    )
+
     return parser
 
 
@@ -292,6 +311,42 @@ def main() -> None:
         print(f"Retrieved references: {len(references)}")
         if not arguments.dry_run:
             print(f"Planned actions: {len(payload['plan'].get('actions', []))}")
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "plan-layout":
+        analysis = load_json(arguments.analysis_file)
+        chunks = build_or_refresh_reference_library(
+            arguments.training_directory,
+            arguments.cache,
+        )
+
+        if arguments.dry_run:
+            payload = {
+                "planner": "dry-run",
+                "difficulty": arguments.difficulty,
+                "reference_chunks": len(chunks),
+            }
+        else:
+            plan = request_openai_layout(
+                analysis,
+                chunks,
+                difficulty=arguments.difficulty,
+                model=arguments.model,
+                reasoning_effort=arguments.reasoning_effort,
+            )
+            payload = {
+                "planner": "openai",
+                "model": arguments.model,
+                "difficulty": arguments.difficulty,
+                "reference_chunks": len(chunks),
+                "plan": plan,
+            }
+
+        output = write_json(arguments.out, payload)
+        print(f"Wrote {output}")
+        print(f"Reference chunks: {len(chunks)}")
+        if not arguments.dry_run:
+            print(f"Planned sections: {len(payload['plan'].get('sections', []))}")
         return
 
     parser.error("Unknown command")
