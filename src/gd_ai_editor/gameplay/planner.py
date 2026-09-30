@@ -750,43 +750,66 @@ def request_openai_layout(
         song_offset=song_offset,
     )
 
-    body = {
-        "model": model,
-        "reasoning": {"effort": reasoning_effort},
-        "input": prompt,
-        "max_output_tokens": 12000,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "geometry_dash_level_plan",
-                "strict": True,
-                "schema": LAYOUT_PLAN_SCHEMA,
-            }
-        },
-    }
+    def perform_request(prompt_text: str) -> dict[str, Any]:
+        body = {
+            "model": model,
+            "reasoning": {"effort": reasoning_effort},
+            "input": prompt_text,
+            "max_output_tokens": 12000,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "geometry_dash_level_plan",
+                    "strict": True,
+                    "schema": LAYOUT_PLAN_SCHEMA,
+                }
+            },
+        }
 
-    http_request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-    )
+        http_request = urllib.request.Request(
+            "https://api.openai.com/v1/responses",
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
 
+        try:
+            with urllib.request.urlopen(
+                http_request,
+                timeout=timeout_seconds,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"OpenAI API returned HTTP {exc.code}: {details}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Could not reach the OpenAI API: {exc.reason}"
+            ) from exc
+
+        return json.loads(_extract_response_text(payload))
+
+    plan = perform_request(prompt)
     try:
-        with urllib.request.urlopen(http_request, timeout=timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI API returned HTTP {exc.code}: {details}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Could not reach the OpenAI API: {exc.reason}") from exc
-
-    plan = json.loads(_extract_response_text(payload))
-    _validate_layout_plan(plan, expected_sections)
-    return plan
+        _validate_layout_plan(plan, expected_sections)
+        return plan
+    except (RuntimeError, TypeError) as error:
+        repair_prompt = (
+            prompt
+            + "\n\nYOUR PREVIOUS PLAN FAILED THE LOCAL SEMANTIC VALIDATOR. "
+            "Return a complete corrected plan, not a patch. "
+            f"VALIDATION ERROR: {error}\n"
+            "PREVIOUS PLAN:\n"
+            + json.dumps(plan, separators=(",", ":"))
+        )
+        repaired = perform_request(repair_prompt)
+        _validate_layout_plan(repaired, expected_sections)
+        return repaired
 
 
 def build_or_refresh_reference_library(
