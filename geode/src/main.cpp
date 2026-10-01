@@ -359,6 +359,47 @@ std::string exportStem(GJGameLevel* level) {
     return fmt::format("{}-{}", name, milliseconds);
 }
 
+std::string readLogTail(
+    std::filesystem::path const& path,
+    std::size_t maximumCharacters = 2200
+) {
+    std::ifstream stream(path, std::ios::in | std::ios::binary);
+    if (!stream) {
+        return {};
+    }
+
+    stream.seekg(0, std::ios::end);
+    auto size = stream.tellg();
+    if (size <= 0) {
+        return {};
+    }
+
+    auto characterCount = static_cast<std::size_t>(size);
+    auto start =
+        characterCount > maximumCharacters
+            ? characterCount - maximumCharacters
+            : 0;
+
+    stream.seekg(static_cast<std::streamoff>(start), std::ios::beg);
+
+    std::string text(
+        (std::istreambuf_iterator<char>(stream)),
+        std::istreambuf_iterator<char>()
+    );
+
+    // FLAlertLayer treats angle brackets as markup. Preserve the diagnostic
+    // text without letting backend output accidentally become UI tags.
+    for (char& character : text) {
+        if (character == '<') {
+            character = '[';
+        } else if (character == '>') {
+            character = ']';
+        }
+    }
+
+    return text;
+}
+
 void showNotification(std::string const& message, NotificationIcon icon, float duration = 3.0f) {
     Notification::create(message, icon, duration)->show();
 }
@@ -691,13 +732,25 @@ class $modify(GDAIEditorUI, EditorUI) {
                     g_generationRunning = false;
                     editorLayer->release();
 
+                    auto logTail = readLogTail(logPath);
+                    log::error(
+                        "Luna planner failed with exit code {}. Log tail:\n{}",
+                        exitCode,
+                        logTail
+                    );
+
+                    auto diagnostic = logTail.empty()
+                        ? std::string("The backend did not write a diagnostic message.")
+                        : logTail;
+
                     FLAlertLayer::create(
                         "Luna Planning Failed",
                         fmt::format(
-                            "The planner exited with code <cr>{}</c>.<br><br>"
-                            "No procedural gameplay was substituted, so you always know "
-                            "whether the LLM actually ran.<br><br>Log:<br><cy>{}</c>",
+                            "Exit code: <cr>{}</c><br><br>"
+                            "<cy>Backend error:</c><br>{}<br><br>"
+                            "Full log:<br><cy>{}</c>",
                             exitCode,
+                            diagnostic,
                             logPath.string()
                         ),
                         "OK"
