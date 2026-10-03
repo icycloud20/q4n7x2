@@ -413,6 +413,7 @@ def main() -> None:
         chunks = build_or_refresh_reference_library(
             arguments.training_directory,
             arguments.cache,
+            default_gmd_difficulty=arguments.difficulty,
         )
 
         if arguments.dry_run:
