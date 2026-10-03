@@ -625,7 +625,7 @@ class $modify(GDAIEditorUI, EditorUI) {
             finishEarly();
             FLAlertLayer::create(
                 "No Training Exports",
-                "The LLM planner needs your aligned gameplay exports first.",
+                "The LLM planner needs aligned JSON exports or .gmd training files first.",
                 "OK"
             )->show();
             return;
@@ -648,7 +648,7 @@ class $modify(GDAIEditorUI, EditorUI) {
             return;
         }
 
-        auto cachePath = cacheDirectory / "human-chunks-v6.json";
+        auto cachePath = cacheDirectory / "human-chunks-v7.json";
         auto stem = exportStem(level);
         auto planPath = planDirectory / (stem + "-plan.json");
         auto logPath = planDirectory / (stem + "-plan.log");
