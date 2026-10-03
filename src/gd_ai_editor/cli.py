@@ -31,6 +31,17 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
+def _catalog_levels_for_gmd(
+    gmd_file: Path,
+    explicit_paths: list[Path],
+) -> list[dict]:
+    paths = list(explicit_paths)
+    if not paths:
+        paths = sorted(gmd_file.parent.glob("*-aligned.json"))
+
+    return [load_json(path) for path in paths]
+
+
 def _print_summary(analysis) -> None:
     print(f"Source: {analysis.source_name}")
     print(f"Duration: {analysis.duration:.2f}s")
@@ -266,7 +277,10 @@ def main() -> None:
         return
 
     if arguments.command == "gameplay" and arguments.gameplay_command == "import-gmd":
-        catalog_levels = [load_json(path) for path in arguments.catalog_from]
+        catalog_levels = _catalog_levels_for_gmd(
+            arguments.gmd_file,
+            arguments.catalog_from,
+        )
         catalog = build_object_catalog(catalog_levels) if catalog_levels else None
         gameplay = load_gmd_gameplay(
             arguments.gmd_file,
@@ -282,7 +296,10 @@ def main() -> None:
         return
 
     if arguments.command == "gameplay" and arguments.gameplay_command == "align-gmd":
-        catalog_levels = [load_json(path) for path in arguments.catalog_from]
+        catalog_levels = _catalog_levels_for_gmd(
+            arguments.gmd_file,
+            arguments.catalog_from,
+        )
         catalog = build_object_catalog(catalog_levels) if catalog_levels else None
         gameplay = load_gmd_gameplay(
             arguments.gmd_file,
