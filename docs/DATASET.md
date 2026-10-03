@@ -63,6 +63,50 @@ audio_time_seconds = level_time_seconds + song_offset_seconds
 The mod uses Geometry Dash's own `LevelEditorLayer::timeForXPos` conversion, so speed changes
 inside the level are handled by the game rather than recreated with guessed constants.
 
+## Direct .gmd imports
+
+The backend can also ingest standard Geometry Dash `.gmd` files. A GMD is parsed as a plist,
+its `k4` level string is decoded, and the object stream is converted into the same raw gameplay
+schema used by the Geode exporter.
+
+Two commands are available:
+
+```text
+gd-ai gameplay import-gmd Example.gmd --difficulty "Hard Demon" --out Example-raw.json
+gd-ai gameplay align-gmd Example.gmd Example-analysis.json --difficulty "Hard Demon" --out Example-aligned.json
+```
+
+If existing `*-aligned.json` files are beside the GMD, their game-reported object categories
+are automatically used as an object-ID catalog. This is important because a GMD preserves object
+IDs and properties but does not include Geometry Dash's runtime `GameObjectType` classification.
+
+The Luna training-folder scan can also consume GMD files directly. Put a matching song analysis
+beside the GMD using one of these names:
+
+```text
+Example.gmd
+Example-analysis.json
+```
+
+or `Example.analysis.json` / `Example_analysis.json`.
+
+Direct GMD imports preserve:
+
+- full object IDs,
+- exact x/y coordinates,
+- rotation,
+- uniform and independent x/y scale,
+- editor layers and groups,
+- raw object property key/value pairs,
+- start mode / speed / mini / dual state,
+- song offset,
+- speed portal timing changes.
+
+For timing, the importer integrates the known Geometry Dash horizontal speeds across speed portals.
+When possible, prefer a Geode editor export for maximum fidelity because the in-game exporter uses
+Geometry Dash's own timing and object-type information directly. GMD support is intended to make
+large layout datasets much easier to collect without opening every level manually.
+
 ## Beat-aligned export
 
 After writing the raw export, the bundled backend aligns every object against the cached song
