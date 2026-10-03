@@ -9,8 +9,10 @@ from gd_ai_editor.gameplay import (
     PlannerRequest,
     align_gameplay_export,
     build_motif_profile,
+    build_object_catalog,
     build_or_refresh_reference_library,
     extract_reference_chunks,
+    load_gmd_gameplay,
     load_json,
     load_reference_library,
     request_openai_layout,
@@ -102,6 +104,39 @@ def _build_parser() -> argparse.ArgumentParser:
 
     gameplay_parser = commands.add_parser("gameplay", help="Gameplay dataset commands")
     gameplay_commands = gameplay_parser.add_subparsers(dest="gameplay_command", required=True)
+
+    import_gmd_parser = gameplay_commands.add_parser(
+        "import-gmd",
+        help="Parse a .gmd file into the raw gameplay-training schema",
+    )
+    import_gmd_parser.add_argument("gmd_file", type=Path)
+    import_gmd_parser.add_argument("--out", type=Path, required=True)
+    import_gmd_parser.add_argument("--difficulty", default="Unknown")
+    import_gmd_parser.add_argument(
+        "--catalog-from",
+        nargs="*",
+        type=Path,
+        default=[],
+        help="Optional aligned JSON exports used to classify object IDs",
+    )
+
+    align_gmd_parser = gameplay_commands.add_parser(
+        "align-gmd",
+        help="Parse a .gmd and align it directly to analyzed song beats",
+    )
+    align_gmd_parser.add_argument("gmd_file", type=Path)
+    align_gmd_parser.add_argument("analysis_file", type=Path)
+    align_gmd_parser.add_argument("--out", type=Path, required=True)
+    align_gmd_parser.add_argument("--difficulty", default="Unknown")
+    align_gmd_parser.add_argument(
+        "--catalog-from",
+        nargs="*",
+        type=Path,
+        default=[],
+        help="Optional aligned JSON exports used to classify object IDs",
+    )
+    align_gmd_parser.add_argument("--window-beats", type=float, default=8.0)
+    align_gmd_parser.add_argument("--stride-beats", type=float, default=4.0)
 
     align_parser = gameplay_commands.add_parser(
         "align",
@@ -228,6 +263,43 @@ def main() -> None:
 
         if arguments.summary:
             _print_summary(analysis)
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "import-gmd":
+        catalog_levels = [load_json(path) for path in arguments.catalog_from]
+        catalog = build_object_catalog(catalog_levels) if catalog_levels else None
+        gameplay = load_gmd_gameplay(
+            arguments.gmd_file,
+            difficulty_label=arguments.difficulty,
+            object_catalog=catalog,
+        )
+        output = write_json(arguments.out, gameplay)
+        summary = gameplay.get("summary", {})
+        print(f"Wrote {output}")
+        print(f"GMD objects: {summary.get('total_editor_objects', 0)}")
+        print(f"Catalog-classified: {summary.get('catalog_classified_objects', 0)}")
+        print(f"Unknown objects: {summary.get('unknown_objects', 0)}")
+        return
+
+    if arguments.command == "gameplay" and arguments.gameplay_command == "align-gmd":
+        catalog_levels = [load_json(path) for path in arguments.catalog_from]
+        catalog = build_object_catalog(catalog_levels) if catalog_levels else None
+        gameplay = load_gmd_gameplay(
+            arguments.gmd_file,
+            difficulty_label=arguments.difficulty,
+            object_catalog=catalog,
+        )
+        analysis = load_json(arguments.analysis_file)
+        aligned = align_gameplay_export(
+            gameplay,
+            analysis,
+            window_beats=arguments.window_beats,
+            stride_beats=arguments.stride_beats,
+        )
+        output = write_json(arguments.out, aligned)
+        print(f"Wrote {output}")
+        print(f"Aligned GMD objects: {len(aligned.get('objects', []))}")
+        print(f"Training windows: {len(aligned.get('windows', []))}")
         return
 
     if arguments.command == "gameplay" and arguments.gameplay_command == "align":
