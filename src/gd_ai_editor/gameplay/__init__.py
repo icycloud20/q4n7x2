@@ -1,6 +1,7 @@
 """Geometry Dash gameplay representation, retrieval, and music alignment."""
 
 from .alignment import align_gameplay_export, load_json, write_json
+from .gmd import build_object_catalog, load_gmd_gameplay
 from .planner import (
     PlannerRequest,
     build_or_refresh_reference_library,
@@ -16,9 +17,11 @@ from .profile import build_motif_profile
 __all__ = [
     "PlannerRequest",
     "align_gameplay_export",
+    "build_object_catalog",
     "build_motif_profile",
     "build_or_refresh_reference_library",
     "extract_reference_chunks",
+    "load_gmd_gameplay",
     "load_json",
     "load_reference_library",
     "request_openai_layout",
