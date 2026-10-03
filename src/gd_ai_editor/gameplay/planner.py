@@ -12,6 +12,9 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any
 
+from .alignment import align_gameplay_export
+from .gmd import build_object_catalog, load_gmd_gameplay
+
 SUPPORTED_MODES = ("cube", "ship", "ball", "ufo", "wave")
 INTERACTION_CATEGORIES = {"hazard", "orb", "pad", "portal"}
 RENDER_CATEGORIES = {"solid", "hazard", "orb", "pad", "collision"}
@@ -1534,20 +1537,46 @@ def request_openai_layout(
         )
 
 
+def _gmd_analysis_sidecar(path: Path) -> Path | None:
+    candidates = (
+        path.with_name(f"{path.stem}-analysis.json"),
+        path.with_name(f"{path.stem}.analysis.json"),
+        path.with_name(f"{path.stem}_analysis.json"),
+    )
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
 def build_or_refresh_reference_library(
     training_directory: Path,
     cache_path: Path,
+    *,
+    default_gmd_difficulty: str = "Unknown",
 ) -> list[dict[str, Any]]:
     aligned_files = sorted(training_directory.glob("*-aligned.json"))
-    if not aligned_files:
+    gmd_files = sorted(training_directory.glob("*.gmd"))
+    gmd_sources = [
+        (path, analysis)
+        for path in gmd_files
+        if (analysis := _gmd_analysis_sidecar(path)) is not None
+    ]
+
+    if not aligned_files and not gmd_sources:
         raise FileNotFoundError(
-            f"No aligned gameplay exports were found in {training_directory}"
+            "No aligned gameplay exports or .gmd + analysis pairs were found in "
+            f"{training_directory}"
         )
 
-    newest_source = max(path.stat().st_mtime_ns for path in aligned_files)
+    source_paths = list(aligned_files)
+    for gmd_path, analysis_path in gmd_sources:
+        source_paths.extend((gmd_path, analysis_path))
+
+    newest_source = max(path.stat().st_mtime_ns for path in source_paths)
     source_signature = {
-        "files": len(aligned_files),
+        "aligned_files": len(aligned_files),
+        "gmd_files": len(gmd_sources),
+        "files": len(source_paths),
         "newest_mtime_ns": newest_source,
+        "default_gmd_difficulty": default_gmd_difficulty,
     }
 
     if cache_path.exists():
@@ -1560,10 +1589,38 @@ def build_or_refresh_reference_library(
         except (OSError, json.JSONDecodeError):
             pass
 
+    aligned_levels: list[dict[str, Any]] = []
+    for source_path in aligned_files:
+        value = json.loads(source_path.read_text(encoding="utf-8"))
+        if isinstance(value, dict):
+            aligned_levels.append(value)
+
+    # The Geode exports are authoritative for GameObjectType classification.
+    # Reuse their object IDs when parsing GMDs instead of guessing which custom
+    # block/slope/hazard IDs are gameplay.
+    object_catalog = build_object_catalog(aligned_levels)
+
+    imported_gmd_levels: list[tuple[dict[str, Any], int]] = []
+    for gmd_path, analysis_path in gmd_sources:
+        gameplay = load_gmd_gameplay(
+            gmd_path,
+            difficulty_label=default_gmd_difficulty,
+            object_catalog=object_catalog,
+        )
+        analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        if not isinstance(analysis, dict):
+            continue
+
+        aligned = align_gameplay_export(gameplay, analysis)
+        modified = max(
+            gmd_path.stat().st_mtime_ns,
+            analysis_path.stat().st_mtime_ns,
+        )
+        imported_gmd_levels.append((aligned, modified))
+
     chosen_levels: dict[str, tuple[dict[str, Any], int, bool]] = {}
 
-    for source_path in aligned_files:
-        level = json.loads(source_path.read_text(encoding="utf-8"))
+    for source_path, level in zip(aligned_files, aligned_levels, strict=False):
         metadata = level.get("level")
         if not isinstance(metadata, dict):
             metadata = {}
@@ -1571,8 +1628,17 @@ def build_or_refresh_reference_library(
         level_name = str(metadata.get("name", source_path.stem))
         labeled = str(metadata.get("difficulty_label", "Unknown")) != "Unknown"
         modified = source_path.stat().st_mtime_ns
+        chosen_levels[level_name] = (level, modified, labeled)
 
+    for level, modified in imported_gmd_levels:
+        metadata = level.get("level")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        level_name = str(metadata.get("name", "Imported GMD"))
+        labeled = str(metadata.get("difficulty_label", "Unknown")) != "Unknown"
         previous = chosen_levels.get(level_name)
+
         if previous is None:
             chosen_levels[level_name] = (level, modified, labeled)
             continue
@@ -1592,10 +1658,12 @@ def build_or_refresh_reference_library(
     cache_path.write_text(
         json.dumps(
             {
-                "schema_version": 6,
+                "schema_version": 7,
                 "source_signature": source_signature,
                 "source_level_count": len(levels),
-                "source_file_count": len(aligned_files),
+                "source_file_count": len(source_paths),
+                "aligned_source_count": len(aligned_files),
+                "gmd_source_count": len(imported_gmd_levels),
                 "chunk_count": len(chunks),
                 "chunks": chunks,
             },
@@ -1605,7 +1673,6 @@ def build_or_refresh_reference_library(
         encoding="utf-8",
     )
     return chunks
-
 
 def write_reference_library(path: Path, chunks: list[dict[str, Any]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
